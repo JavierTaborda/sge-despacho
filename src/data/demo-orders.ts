@@ -6,7 +6,7 @@ export const demoOrders: DemoOrder[] = [
     customer: "COFR-20",
     address: "N010001",
     scheduledAt: "Sin fecha de despacho",
-    priority: "Normal",
+    
     items: [
       {
         id: "603011-1",
@@ -25,7 +25,7 @@ export const demoOrders: DemoOrder[] = [
     customer: "Clínica Santa María",
     address: "Av. Providencia 1250, Santiago",
     scheduledAt: "09:30 – 12:00",
-    priority: "Alta",
+    
     items: [
       {
         id: "item-1",
@@ -64,7 +64,7 @@ export const demoOrders: DemoOrder[] = [
     customer: "Hospital del Valle",
     address: "Los Leones 890, Santiago",
     scheduledAt: "12:00 – 14:00",
-    priority: "Normal",
+
     items: [
       {
         id: "item-4",
@@ -83,7 +83,7 @@ export const demoOrders: DemoOrder[] = [
     customer: "Red Salud Norte",
     address: "Ruta 5 Norte 4300, Quilicura",
     scheduledAt: "14:00 – 17:00",
-    priority: "Normal",
+   
     items: [
       {
         id: "item-5",

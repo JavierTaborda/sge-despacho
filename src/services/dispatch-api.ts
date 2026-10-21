@@ -1,5 +1,5 @@
 import type { AxiosAdapter, InternalAxiosRequestConfig } from "axios";
-import { AxiosError, AxiosHeaders, create } from "axios";
+import { AxiosError, AxiosHeaders, create, isAxiosError } from "axios";
 
 import { demoOrders } from "../data/demo-orders.ts";
 import type { DispatchOrder } from "../domain/dispatch.ts";
@@ -83,7 +83,10 @@ export function createMockAdapter(
         ...response,
         status: error.status,
         statusText: "Error",
-        data: { message: error.message },
+        data: {
+          message: error.message,
+          ...(error.order ? { order: error.order } : {}),
+        },
       });
     }
   };
@@ -158,4 +161,11 @@ export function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   console.error("Error de despacho no reconocido:", error);
   return "No pudimos procesar la solicitud. Inténtalo nuevamente.";
+}
+
+export function getErrorOrder(error: unknown) {
+  if (error instanceof DispatchError) return error.order;
+  if (isAxiosError<{ order?: DispatchOrder }>(error)) {
+    return error.response?.data?.order;
+  }
 }

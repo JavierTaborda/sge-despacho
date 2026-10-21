@@ -1,34 +1,34 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
-    type TextInputInstance,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+  type TextInputInstance,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Badge, Button, Icon, Notice, ProgressBar } from "@/components/ui";
-import { colors } from "@/constants/theme";
+import { colors, shadows, typography } from "@/constants/theme";
 import {
-    getCurrentItem,
-    getOrderProgress,
-    isItemComplete,
-    type DispatchOrder,
+  getCurrentItem,
+  getOrderProgress,
+  isItemComplete,
+  type DispatchOrder,
 } from "@/domain/dispatch";
 import {
-    checkBarcode,
-    checkSerial,
-    completeDispatch,
-    getDemoCode,
-    getDispatchOrder,
-    getErrorMessage,
+  checkBarcode,
+  checkSerial,
+  completeDispatch,
+  getDemoCode,
+  getDispatchOrder,
+  getErrorMessage,
+  getErrorOrder,
 } from "@/services/dispatch-api";
 
 export default function DispatchRoute() {
@@ -88,7 +88,7 @@ function DispatchScreen({ id }: { id: string }) {
 
   async function submitScan(value: string) {
     if (requestInFlight.current || !order || !item) return;
-    if (!value.trim()) {
+    if (!value.trim() && !serialMode) {
       setError("Escanea o escribe un código antes de validar.");
       inputRef.current?.focus();
       return;
@@ -112,11 +112,11 @@ function DispatchScreen({ id }: { id: string }) {
         setFeedback(
           updatedItem && isItemComplete(updatedItem)
             ? `${item.name}: todas las unidades verificadas.`
-            : `Serial registrado. ${updatedItem?.serials.length ?? 0} de ${item.quantity} unidades verificadas.`,
+            : `Serial registrado. ${updatedItem?.serials.length ?? 0} de ${item.quantity} unidades verificadas. Escanea nuevamente el código de barras para la siguiente unidad.`,
         );
       } else if ("serial" in response && response.serial) {
         setFeedback(
-          `Artículo correcto. Ahora escanea sus ${item.quantity} ${item.quantity === 1 ? "serial" : "seriales"}.`,
+          `Artículo correcto. Ahora escanea el serial de la unidad ${item.serials.length + 1} de ${item.quantity}.`,
         );
       } else {
         setFeedback(
@@ -125,7 +125,22 @@ function DispatchScreen({ id }: { id: string }) {
       }
     } catch (reason) {
       if (mounted.current) {
-        setError(getErrorMessage(reason));
+        const latestOrder = getErrorOrder(reason);
+        if (latestOrder?.id === order.id) {
+          setOrder(latestOrder);
+        } else if (serialMode) {
+          setOrder({
+            ...order,
+            items: order.items.map((line) =>
+              line.id === item.id ? { ...line, barcodeChecked: false } : line,
+            ),
+          });
+        }
+        setError(
+          serialMode
+            ? `${getErrorMessage(reason)} Vuelve a escanear el código de barras antes del serial.`
+            : getErrorMessage(reason),
+        );
         setCode("");
       }
     } finally {
@@ -162,30 +177,30 @@ function DispatchScreen({ id }: { id: string }) {
 
   return (
     <SafeAreaView
-      style={styles.safe}
+      className="flex-1 bg-background"
       edges={["top", "bottom", "left", "right"]}
     >
       <KeyboardAvoidingView
-        style={styles.flex}
+        className="flex-1"
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
-        <View style={styles.container}>
-          <View style={styles.topbar}>
+        <View className="w-full max-w-content flex-1 self-center">
+          <View className="flex-row items-center gap-3 px-5 pb-[18px] pt-3">
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Volver a las órdenes"
               disabled={busy}
               onPress={goBack}
-              style={styles.backButton}
+              className="h-11 w-11 items-center justify-center rounded-[15px] border border-line bg-surface"
             >
               <Icon name="arrow-back" size={22} />
             </Pressable>
-            <Text style={styles.topbarTitle}>
+            <Text className="flex-1 text-[15px] font-bold text-ink">
               {order?.completedAt
                 ? "Comprobante de despacho"
                 : "Preparar despacho"}
             </Text>
-            <View style={styles.secureIcon}>
+            <View className="h-9 w-9 items-center justify-center">
               <Icon
                 name="shield-checkmark-outline"
                 color={colors.secondary}
@@ -195,12 +210,12 @@ function DispatchScreen({ id }: { id: string }) {
           </View>
 
           {loading ? (
-            <View style={styles.loading}>
+            <View className="flex-1 items-center justify-center gap-[15px]">
               <ActivityIndicator color={colors.primary} size="large" />
-              <Text style={styles.muted}>Cargando orden…</Text>
+              <Text className="text-[13px] text-muted">Cargando orden…</Text>
             </View>
           ) : !order ? (
-            <View style={styles.errorState}>
+            <View className="gap-4 p-6">
               <Notice message={error || "La orden no está disponible."} />
               <Button
                 title="Reintentar"
@@ -215,38 +230,43 @@ function DispatchScreen({ id }: { id: string }) {
             <ScrollView
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.content}
+              contentContainerClassName="gap-[18px] p-6 pb-[35px] pt-1.5"
             >
-              <View style={styles.headingRow}>
-                <Text style={styles.eyebrow}>ORDEN DE DESPACHO</Text>
-                <Badge tone={order.completedAt ? "green" : "orange"}>
-                  {order.completedAt
-                    ? "Completada"
-                    : order.priority === "Alta"
-                      ? "Prioridad alta"
-                      : "En preparación"}
-                </Badge>
-              </View>
-              <Text style={styles.orderId}>{order.id}</Text>
-              <Text style={styles.customer}>{order.customer}</Text>
-              <View style={styles.addressRow}>
-                <Icon name="location-outline" size={16} color={colors.muted} />
-                <Text style={styles.address}>{order.address}</Text>
+              <View className="gap-2 rounded-[18px] border border-line bg-surface p-[17px]">
+                <View className="gap-1">
+                  <Text className="text-[10px] font-bold tracking-[1px] text-muted">
+                    NÚMERO DE PREDESPACHO
+                  </Text>
+                  <Text className="text-2xl font-bold tracking-[-1.3px] text-ink">
+                    {order.id}
+                  </Text>
+                </View>
+                <View className="h-px bg-line" />
+                <View className="gap-1">
+                  <Text className="text-[10px] font-bold tracking-[1px] text-muted">
+                    CLIENTE
+                  </Text>
+                  <Text className="text-[17px] font-semibold leading-6 text-ink">
+                    {order.customer}
+                  </Text>
+                </View>
               </View>
 
-              <View style={styles.progressCard}>
-                <View style={styles.between}>
-                  <Text style={styles.progressTitle}>
+              <View className="gap-3 rounded-[18px] border border-line bg-surface p-[17px]">
+                <View className="flex-row items-center justify-between gap-2">
+                  <Text className="text-[12px] font-semibold text-ink">
                     Progreso de preparación
                   </Text>
-                  <Text style={styles.percent}>{progress.percent}%</Text>
+                  <Text className="text-[16px] font-extrabold text-primary">
+                    {progress.percent}%
+                  </Text>
                 </View>
                 <ProgressBar percent={progress.percent} />
-                <View style={styles.between}>
-                  <Text style={styles.progressCaption}>
+                <View className="flex-row items-center justify-between gap-2">
+                  <Text className="text-[10px] text-muted">
                     {progress.checked} de {progress.total} unidades verificadas
                   </Text>
-                  <Text style={styles.progressCaption}>
+                  <Text className="text-[10px] text-muted">
                     {order.items.filter(isItemComplete).length}/
                     {order.items.length} artículos
                   </Text>
@@ -254,22 +274,28 @@ function DispatchScreen({ id }: { id: string }) {
               </View>
 
               {order.completedAt ? (
-                <View style={styles.successCard}>
-                  <View style={styles.successIcon}>
+                <View className="gap-4 rounded-3xl border border-success-border bg-surface p-6">
+                  <View className="h-[78px] w-[78px] items-center justify-center self-center rounded-full bg-secondary-light">
                     <Icon
                       name="checkmark-done"
                       size={42}
                       color={colors.secondary}
                     />
                   </View>
-                  <Text style={styles.successTitle}>¡Despacho listo!</Text>
-                  <Text style={styles.successDescription}>
+                  <Text className="text-center text-[28px] font-extrabold tracking-[-0.9px] text-ink">
+                    ¡Despacho listo!
+                  </Text>
+                  <Text className="text-center text-[13px] leading-5 text-muted">
                     Cada artículo verificado. Cada serial en su lugar.
                   </Text>
-                  <View style={styles.receipt}>
-                    <Text style={styles.receiptLabel}>CONFIRMACIÓN DEMO</Text>
-                    <Text style={styles.receiptId}>SGE-{order.id}</Text>
-                    <Text style={styles.receiptDate}>
+                  <View className="my-[5px] items-center gap-[7px] border-y border-dashed border-line py-5">
+                    <Text className="text-[9px] font-semibold tracking-[1.5px] text-muted">
+                      CONFIRMACIÓN DEMO
+                    </Text>
+                    <Text className="text-[18px] font-bold text-ink">
+                      SGE-{order.id}
+                    </Text>
+                    <Text className="text-[11px] text-muted">
                       {new Date(order.completedAt).toLocaleString("es-CL")}
                     </Text>
                   </View>
@@ -280,33 +306,39 @@ function DispatchScreen({ id }: { id: string }) {
                   />
                 </View>
               ) : item ? (
-                <View style={styles.scanCard}>
-                  <View style={styles.scanCardHeading}>
+                <View
+                  className="gap-3.5 rounded-3xl border border-scanner-border bg-surface p-5"
+                  style={shadows.scanner}
+                >
+                  <View className="flex-row items-center justify-between">
                     <Badge tone="orange">
                       ARTÍCULO {itemIndex + 1} DE {order.items.length}
                     </Badge>
-                    <View style={styles.location}>
+                    <View className="flex-row items-center gap-[5px]">
                       <Icon
                         name="grid-outline"
                         size={13}
                         color={colors.muted}
                       />
-                      <Text style={styles.locationText}>{item.location}</Text>
+                      <Text className="text-[11px] font-semibold text-muted">
+                        {item.location}
+                      </Text>
                     </View>
                   </View>
-                  <Text style={styles.itemName}>{item.name}</Text>
-                  <Text style={styles.sku}>
+                  <Text className="mt-px text-[21px] font-bold tracking-[-0.5px] text-ink">
+                    {item.name}
+                  </Text>
+                  <Text className="-mt-2 text-[12px] text-muted">
                     SKU {item.sku} · {item.quantity}{" "}
                     {item.quantity === 1 ? "unidad" : "unidades"}
                   </Text>
 
-                  <View style={styles.steps}>
-                    <View style={styles.step}>
+                  <View className="flex-row items-center gap-2 py-[9px]">
+                    <View className="flex-row items-center gap-1.5">
                       <View
-                        style={[
-                          styles.stepCircle,
-                          serialMode && styles.stepCircleDone,
-                        ]}
+                        className={`h-[21px] w-[21px] items-center justify-center rounded-[11px] ${
+                          serialMode ? "bg-secondary" : "bg-primary"
+                        }`}
                       >
                         {serialMode ? (
                           <Icon
@@ -315,74 +347,74 @@ function DispatchScreen({ id }: { id: string }) {
                             color={colors.surface}
                           />
                         ) : (
-                          <Text style={styles.stepNumber}>1</Text>
+                          <Text className="text-[10px] font-bold text-surface">
+                            1
+                          </Text>
                         )}
                       </View>
                       <Text
-                        style={[
-                          styles.stepText,
-                          !serialMode && styles.stepTextActive,
-                        ]}
+                        className={`text-[10px] ${
+                          !serialMode ? "font-bold text-ink" : "text-muted"
+                        }`}
                       >
                         Código de barras
                       </Text>
                     </View>
-                    <View style={styles.stepLine} />
-                    <View style={styles.step}>
+                    <View className="h-px min-w-[8px] flex-1 bg-line" />
+                    <View className="flex-row items-center gap-1.5">
                       <View
-                        style={[
-                          styles.stepCircle,
-                          !serialMode && styles.stepCircleWaiting,
-                        ]}
+                        className={`h-[21px] w-[21px] items-center justify-center rounded-[11px] ${
+                          serialMode ? "bg-primary" : "bg-line"
+                        }`}
                       >
                         <Text
-                          style={[
-                            styles.stepNumber,
-                            !serialMode && styles.stepNumberWaiting,
-                          ]}
+                          className={`text-[10px] font-bold ${
+                            serialMode ? "text-surface" : "text-muted"
+                          }`}
                         >
                           2
                         </Text>
                       </View>
                       <Text
-                        style={[
-                          styles.stepText,
-                          serialMode && styles.stepTextActive,
-                        ]}
+                        className={`text-[10px] ${
+                          serialMode ? "font-bold text-ink" : "text-muted"
+                        }`}
                       >
-                        Seriales
+                        Serial
                       </Text>
                     </View>
                   </View>
 
-                  <View style={styles.scanner}>
-                    <View style={[styles.corner, styles.topLeft]} />
-                    <View style={[styles.corner, styles.topRight]} />
-                    <View style={[styles.corner, styles.bottomLeft]} />
-                    <View style={[styles.corner, styles.bottomRight]} />
+                  <View className="min-h-[176px] items-center justify-center gap-2 rounded-[13px] bg-scanner p-4">
+                    <View className="absolute left-2.5 top-2.5 h-[22px] w-[22px] rounded-tl-[7px] border-l-2 border-t-2 border-scanner-corner" />
+                    <View className="absolute right-2.5 top-2.5 h-[22px] w-[22px] rounded-tr-[7px] border-r-2 border-t-2 border-scanner-corner" />
+                    <View className="absolute bottom-2.5 left-2.5 h-[22px] w-[22px] rounded-bl-[7px] border-b-2 border-l-2 border-scanner-corner" />
+                    <View className="absolute bottom-2.5 right-2.5 h-[22px] w-[22px] rounded-br-[7px] border-b-2 border-r-2 border-scanner-corner" />
                     <Icon
                       name={serialMode ? "scan-outline" : "barcode-outline"}
                       size={59}
                       color={colors.primary}
                     />
-                    <Text style={styles.scannerTitle}>
+                    <Text className="text-center text-[14px] font-bold text-ink">
                       {serialMode
                         ? "Escanea el serial"
                         : "Escanea el código de barras"}
                     </Text>
-                    <Text style={styles.scannerSubtitle}>
+                    <Text className="text-center text-[10px] leading-4 text-muted">
                       {serialMode
                         ? `Unidad ${item.serials.length + 1} de ${item.quantity} · Un serial por unidad`
-                        : "Usa tu lector o ingresa el código abajo"}
+                        : item.requiresSerial
+                          ? `Unidad ${item.serials.length + 1} de ${item.quantity} · Primero código de barras, luego serial`
+                          : "Usa tu lector o ingresa el código abajo"}
                     </Text>
                   </View>
 
-                  {serialMode && (
-                    <View style={styles.serialProgress}>
-                      <Text style={styles.serialCount}>
+                  {item.requiresSerial && (
+                    <View className="flex-row items-center gap-3">
+                      <Text className="text-[11px] font-bold text-primary-dark">
                         {item.serials.length}/{item.quantity} seriales
                       </Text>
-                      <View style={styles.serialTrack}>
+                      <View className="flex-1">
                         <ProgressBar
                           percent={Math.round(
                             (item.serials.length / item.quantity) * 100,
@@ -392,7 +424,7 @@ function DispatchScreen({ id }: { id: string }) {
                     </View>
                   )}
 
-                  <Text style={styles.inputLabel}>
+                  <Text className="mt-0.5 text-[9px] font-bold tracking-[1.1px] text-muted">
                     {serialMode ? "SERIAL DEL ARTÍCULO" : "CÓDIGO DE BARRAS"}
                   </Text>
                   <TextInput
@@ -411,7 +443,8 @@ function DispatchScreen({ id }: { id: string }) {
                         : "Escanea o escribe el código"
                     }
                     placeholderTextColor={colors.muted}
-                    style={styles.codeInput}
+                    className="-mt-[5px] min-h-[53px] rounded-[13px] border border-field bg-background px-3.5 py-[13px] text-[14px] text-ink"
+                    style={typography.numeric}
                     autoCorrect={false}
                     autoCapitalize="characters"
                     autoComplete="off"
@@ -422,13 +455,13 @@ function DispatchScreen({ id }: { id: string }) {
                       void submitScan(event.nativeEvent.text);
                     }}
                   />
-                  <View style={styles.readerHint}>
+                  <View className="-mt-1.5 flex-row items-center gap-[5px]">
                     <Icon
                       name="keypad-outline"
                       color={colors.muted}
                       size={13}
                     />
-                    <Text style={styles.readerHintText}>
+                    <Text className="text-[10px] text-muted">
                       Lector tipo teclado · Enter para validar
                     </Text>
                   </View>
@@ -447,12 +480,18 @@ function DispatchScreen({ id }: { id: string }) {
                       void submitScan(code);
                     }}
                   />
-                  <View style={styles.demoBox}>
-                    <View style={styles.between}>
-                      <Text style={styles.demoTitle}>PRUEBA SIN LECTOR</Text>
+                  <View className="mt-px gap-[9px] rounded-[14px] bg-background p-[13px]">
+                    <View className="flex-row items-center justify-between gap-2">
+                      <Text className="text-[9px] font-bold tracking-[0.7px] text-muted">
+                        PRUEBA SIN LECTOR
+                      </Text>
                       <Badge>DEMO</Badge>
                     </View>
-                    <Text selectable style={styles.demoCode}>
+                    <Text
+                      selectable
+                      className="text-[13px] font-semibold text-ink"
+                      style={typography.numeric}
+                    >
                       {demoCode}
                     </Text>
                     <Pressable
@@ -462,17 +501,16 @@ function DispatchScreen({ id }: { id: string }) {
                       onPress={() => {
                         if (demoCode) void submitScan(demoCode);
                       }}
-                      style={({ pressed }) => [
-                        styles.demoButton,
-                        (pressed || busy) && { opacity: 0.5 },
-                      ]}
+                      className={`min-h-[40px] flex-row items-center gap-1.5 active:opacity-50 ${
+                        busy ? "opacity-50" : ""
+                      }`}
                     >
                       <Icon
                         name="flash-outline"
                         size={16}
                         color={colors.primaryDark}
                       />
-                      <Text style={styles.demoButtonText}>
+                      <Text className="flex-1 text-[12px] font-bold text-primary-dark">
                         Usar código de prueba
                       </Text>
                       <Icon
@@ -484,16 +522,18 @@ function DispatchScreen({ id }: { id: string }) {
                   </View>
                 </View>
               ) : (
-                <View style={styles.readyCard}>
-                  <View style={styles.readyHeading}>
+                <View className="gap-4 rounded-[22px] border border-success-border bg-surface p-[22px]">
+                  <View className="flex-row items-center gap-[9px]">
                     <Icon
                       name="checkmark-circle"
                       color={colors.secondary}
                       size={26}
                     />
-                    <Text style={styles.readyTitle}>Todo verificado</Text>
+                    <Text className="text-[20px] font-bold text-ink">
+                      Todo verificado
+                    </Text>
                   </View>
-                  <Text style={styles.readyDescription}>
+                  <Text className="text-[13px] leading-[21px] text-muted">
                     Completaste todos los artículos en el orden correcto.
                     Confirma para finalizar el despacho.
                   </Text>
@@ -513,8 +553,8 @@ function DispatchScreen({ id }: { id: string }) {
                 <Notice message={feedback} success />
               )}
 
-              <View style={styles.sequenceHeader}>
-                <Text style={styles.sequenceTitle}>
+              <View className="mt-2 flex-row items-center justify-between">
+                <Text className="text-[17px] font-bold tracking-[-0.3px] text-ink">
                   {order.completedAt
                     ? "Detalle de lo preparado"
                     : "Secuencia de preparación"}
@@ -522,35 +562,36 @@ function DispatchScreen({ id }: { id: string }) {
                 <Icon name="list-outline" size={20} color={colors.muted} />
               </View>
               {!order.completedAt && (
-                <View style={styles.lockHint}>
+                <View className="-mt-[9px] flex-row items-start gap-[5px]">
                   <Icon
                     name="lock-closed-outline"
                     size={13}
                     color={colors.muted}
                   />
-                  <Text style={styles.lockHintText}>
+                  <Text className="flex-1 text-[10px] leading-[15px] text-muted">
                     El siguiente artículo se habilita al completar el actual.
                   </Text>
                 </View>
               )}
-              <View style={styles.sequenceCard}>
+              <View className="rounded-[20px] border border-line bg-surface px-4">
                 {order.items.map((line, index) => {
                   const done = isItemComplete(line);
                   const current = item?.id === line.id;
                   return (
                     <View
                       key={line.id}
-                      style={[
-                        styles.sequenceItem,
-                        index > 0 && styles.sequenceBorder,
-                      ]}
+                      className={`flex-row items-start gap-[11px] py-[18px] ${
+                        index > 0 ? "border-t border-line" : ""
+                      }`}
                     >
                       <View
-                        style={[
-                          styles.sequenceNumber,
-                          done && styles.sequenceDone,
-                          current && styles.sequenceCurrent,
-                        ]}
+                        className={`h-[29px] w-[29px] items-center justify-center rounded-[10px] ${
+                          current
+                            ? "bg-primary-light"
+                            : done
+                              ? "bg-secondary-light"
+                              : "bg-background"
+                        }`}
                       >
                         {done ? (
                           <Icon
@@ -559,7 +600,9 @@ function DispatchScreen({ id }: { id: string }) {
                             color={colors.secondary}
                           />
                         ) : current ? (
-                          <Text style={styles.currentNumber}>{index + 1}</Text>
+                          <Text className="text-[12px] font-bold text-primary-dark">
+                            {index + 1}
+                          </Text>
                         ) : (
                           <Icon
                             name="lock-closed-outline"
@@ -568,16 +611,15 @@ function DispatchScreen({ id }: { id: string }) {
                           />
                         )}
                       </View>
-                      <View style={styles.flex}>
+                      <View className="flex-1">
                         <Text
-                          style={[
-                            styles.sequenceName,
-                            !done && !current && { color: colors.muted },
-                          ]}
+                          className={`text-[12px] font-semibold leading-[18px] ${
+                            !done && !current ? "text-muted" : "text-ink"
+                          }`}
                         >
                           {line.name}
                         </Text>
-                        <Text style={styles.sequenceMeta}>
+                        <Text className="mt-[3px] text-[10px] leading-[15px] text-muted">
                           {line.quantity}{" "}
                           {line.quantity === 1 ? "unidad" : "unidades"} ·{" "}
                           {line.requiresSerial
@@ -588,23 +630,20 @@ function DispatchScreen({ id }: { id: string }) {
                           <Text
                             key={serial}
                             selectable
-                            style={styles.capturedSerial}
+                            className="mt-[5px] text-[10px] text-secondary"
                           >
                             {serial}
                           </Text>
                         ))}
                       </View>
                       <Text
-                        style={[
-                          styles.sequenceStatus,
-                          {
-                            color: done
-                              ? colors.secondary
-                              : current
-                                ? colors.primaryDark
-                                : colors.muted,
-                          },
-                        ]}
+                        className={`mt-1 text-[9px] font-bold ${
+                          done
+                            ? "text-secondary"
+                            : current
+                              ? "text-primary-dark"
+                              : "text-muted"
+                        }`}
                       >
                         {done ? "Listo" : current ? "Actual" : "Pendiente"}
                       </Text>
@@ -612,7 +651,7 @@ function DispatchScreen({ id }: { id: string }) {
                   );
                 })}
               </View>
-              <Text style={styles.demoDisclaimer}>
+              <Text className="text-center text-[9px] leading-4 text-muted">
                 Entorno de prueba · Datos simulados · Sin conexión a un backend
                 real
               </Text>
@@ -623,367 +662,3 @@ function DispatchScreen({ id }: { id: string }) {
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  flex: { flex: 1 },
-  container: { flex: 1, maxWidth: 680, width: "100%", alignSelf: "center" },
-  topbar: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 18,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  backButton: {
-    width: 44,
-    height: 44,
-    borderWidth: 1,
-    borderColor: colors.line,
-    backgroundColor: colors.surface,
-    borderRadius: 15,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  topbarTitle: { flex: 1, fontSize: 15, fontWeight: "700", color: colors.ink },
-  secureIcon: {
-    width: 36,
-    height: 36,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  content: { padding: 24, paddingTop: 6, paddingBottom: 35, gap: 18 },
-  headingRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 8,
-  },
-  eyebrow: {
-    fontSize: 9,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-    color: colors.muted,
-  },
-  orderId: {
-    fontSize: 35,
-    fontWeight: "800",
-    letterSpacing: -1.3,
-    color: colors.ink,
-    marginTop: -10,
-  },
-  customer: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: colors.ink,
-    marginTop: -12,
-  },
-  addressRow: { flexDirection: "row", gap: 5, marginTop: -9 },
-  address: { flex: 1, fontSize: 12, lineHeight: 18, color: colors.muted },
-  between: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8,
-  },
-  progressCard: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 18,
-    padding: 17,
-    gap: 12,
-  },
-  progressTitle: { color: colors.ink, fontSize: 12, fontWeight: "600" },
-  percent: { color: colors.primaryDark, fontSize: 16, fontWeight: "800" },
-  progressCaption: { color: colors.muted, fontSize: 10 },
-  scanCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 24,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: "#FFDAC7",
-    gap: 14,
-    boxShadow: "0 5px 20px rgba(24, 28, 36, 0.025)",
-  },
-  scanCardHeading: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  location: { flexDirection: "row", alignItems: "center", gap: 5 },
-  locationText: { fontSize: 11, color: colors.muted, fontWeight: "600" },
-  itemName: {
-    fontSize: 21,
-    fontWeight: "700",
-    letterSpacing: -0.5,
-    color: colors.ink,
-    marginTop: 1,
-  },
-  sku: { fontSize: 12, color: colors.muted, marginTop: -8 },
-  steps: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 9,
-  },
-  step: { flexDirection: "row", alignItems: "center", gap: 6 },
-  stepCircle: {
-    width: 21,
-    height: 21,
-    borderRadius: 11,
-    backgroundColor: colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  stepCircleDone: { backgroundColor: colors.secondary },
-  stepCircleWaiting: { backgroundColor: colors.line },
-  stepNumber: { color: colors.surface, fontSize: 10, fontWeight: "700" },
-  stepNumberWaiting: { color: colors.muted },
-  stepText: { color: colors.muted, fontSize: 10 },
-  stepTextActive: { color: colors.ink, fontWeight: "700" },
-  stepLine: { flex: 1, minWidth: 8, height: 1, backgroundColor: colors.line },
-  scanner: {
-    backgroundColor: "#FFFAF6",
-    minHeight: 176,
-    borderRadius: 13,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 16,
-    gap: 8,
-  },
-  corner: {
-    position: "absolute",
-    width: 22,
-    height: 22,
-    borderColor: "#FFA476",
-  },
-  topLeft: {
-    top: 10,
-    left: 10,
-    borderTopWidth: 2,
-    borderLeftWidth: 2,
-    borderTopLeftRadius: 7,
-  },
-  topRight: {
-    top: 10,
-    right: 10,
-    borderTopWidth: 2,
-    borderRightWidth: 2,
-    borderTopRightRadius: 7,
-  },
-  bottomLeft: {
-    bottom: 10,
-    left: 10,
-    borderBottomWidth: 2,
-    borderLeftWidth: 2,
-    borderBottomLeftRadius: 7,
-  },
-  bottomRight: {
-    bottom: 10,
-    right: 10,
-    borderBottomWidth: 2,
-    borderRightWidth: 2,
-    borderBottomRightRadius: 7,
-  },
-  scannerTitle: {
-    fontSize: 14,
-    color: colors.ink,
-    fontWeight: "700",
-    textAlign: "center",
-  },
-  scannerSubtitle: {
-    fontSize: 10,
-    color: colors.muted,
-    textAlign: "center",
-    lineHeight: 16,
-  },
-  serialProgress: { flexDirection: "row", alignItems: "center", gap: 12 },
-  serialCount: { fontSize: 11, fontWeight: "700", color: colors.primaryDark },
-  serialTrack: { flex: 1 },
-  inputLabel: {
-    fontSize: 9,
-    fontWeight: "700",
-    letterSpacing: 1.1,
-    color: colors.muted,
-    marginTop: 2,
-  },
-  codeInput: {
-    borderWidth: 1,
-    borderColor: "#D9DDE3",
-    backgroundColor: colors.background,
-    borderRadius: 13,
-    minHeight: 53,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    color: colors.ink,
-    fontSize: 14,
-    marginTop: -5,
-    fontVariant: ["tabular-nums"],
-  },
-  readerHint: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    marginTop: -6,
-  },
-  readerHintText: { fontSize: 10, color: colors.muted },
-  demoBox: {
-    backgroundColor: colors.background,
-    borderRadius: 14,
-    padding: 13,
-    gap: 9,
-    marginTop: 1,
-  },
-  demoTitle: {
-    fontSize: 9,
-    fontWeight: "700",
-    letterSpacing: 0.7,
-    color: colors.muted,
-  },
-  demoCode: {
-    fontSize: 13,
-    color: colors.ink,
-    fontWeight: "600",
-    fontVariant: ["tabular-nums"],
-  },
-  demoButton: {
-    minHeight: 40,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  demoButtonText: {
-    flex: 1,
-    color: colors.primaryDark,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  sequenceHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 8,
-  },
-  sequenceTitle: {
-    fontSize: 17,
-    color: colors.ink,
-    fontWeight: "700",
-    letterSpacing: -0.3,
-  },
-  lockHint: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 5,
-    marginTop: -9,
-  },
-  lockHintText: { flex: 1, color: colors.muted, fontSize: 10, lineHeight: 15 },
-  sequenceCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: colors.line,
-    paddingHorizontal: 16,
-  },
-  sequenceItem: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 11,
-    paddingVertical: 18,
-  },
-  sequenceBorder: { borderTopWidth: 1, borderColor: colors.line },
-  sequenceNumber: {
-    width: 29,
-    height: 29,
-    borderRadius: 10,
-    backgroundColor: colors.background,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sequenceDone: { backgroundColor: colors.secondaryLight },
-  sequenceCurrent: { backgroundColor: colors.primaryLight },
-  currentNumber: { fontSize: 12, fontWeight: "700", color: colors.primaryDark },
-  sequenceName: {
-    fontSize: 12,
-    fontWeight: "600",
-    lineHeight: 18,
-    color: colors.ink,
-  },
-  sequenceMeta: {
-    fontSize: 10,
-    lineHeight: 15,
-    color: colors.muted,
-    marginTop: 3,
-  },
-  sequenceStatus: { fontSize: 9, fontWeight: "700", marginTop: 4 },
-  capturedSerial: { fontSize: 10, color: colors.secondary, marginTop: 5 },
-  readyCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 22,
-    padding: 22,
-    gap: 16,
-    borderWidth: 1,
-    borderColor: "#CBE8D8",
-  },
-  readyHeading: { flexDirection: "row", alignItems: "center", gap: 9 },
-  readyTitle: { fontSize: 20, fontWeight: "700", color: colors.ink },
-  readyDescription: { fontSize: 13, lineHeight: 21, color: colors.muted },
-  successCard: {
-    padding: 24,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: "#CBE8D8",
-    borderRadius: 24,
-    gap: 16,
-  },
-  successIcon: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
-    backgroundColor: colors.secondaryLight,
-    alignSelf: "center",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  successTitle: {
-    fontSize: 28,
-    fontWeight: "800",
-    letterSpacing: -0.9,
-    color: colors.ink,
-    textAlign: "center",
-  },
-  successDescription: {
-    color: colors.muted,
-    fontSize: 13,
-    lineHeight: 20,
-    textAlign: "center",
-  },
-  receipt: {
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderStyle: "dashed",
-    borderColor: colors.line,
-    paddingVertical: 20,
-    gap: 7,
-    alignItems: "center",
-    marginVertical: 5,
-  },
-  receiptLabel: {
-    fontSize: 9,
-    letterSpacing: 1.5,
-    color: colors.muted,
-    fontWeight: "600",
-  },
-  receiptId: { fontSize: 18, fontWeight: "700", color: colors.ink },
-  receiptDate: { fontSize: 11, color: colors.muted },
-  demoDisclaimer: {
-    color: colors.muted,
-    fontSize: 9,
-    textAlign: "center",
-    lineHeight: 16,
-  },
-  loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 15 },
-  muted: { color: colors.muted, fontSize: 13 },
-  errorState: { padding: 24, gap: 16 },
-});

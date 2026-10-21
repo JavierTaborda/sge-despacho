@@ -127,7 +127,7 @@ function mapHeader(header: CbpredesPayload, lines: DtpredesPayload[]): DispatchO
     customer: text(header.cliente, text(header.codcli, "Cliente sin nombre")),
     address: text(header.direccion, text(header.codzon, "Zona no informada")),
     scheduledAt: text(header.fecdesp, "Sin fecha de despacho"),
-    priority: "Normal",
+  
     completedAt: completed ?? null,
     items: [...firstLineByArticle.values()].map((lineGroup, index) => {
       const line = lineGroup[0];

@@ -1,25 +1,23 @@
-import { router, useFocusEffect } from "expo-router";
-import { useCallback, useRef, useState } from "react";
+import { router } from "expo-router";
 import {
   ActivityIndicator,
   FlatList,
   Pressable,
   RefreshControl,
-  StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { Badge, Button, Icon, Notice, ProgressBar } from "@/components/ui";
-import { colors } from "@/constants/theme";
+import { Button, Icon, Notice, ProgressBar } from "@/components/ui";
+import { colors, shadows } from "@/constants/theme";
 import {
   getOrderProgress,
   getOrderStatus,
   type DispatchOrder,
 } from "@/domain/dispatch";
-import { getDispatchOrders, getErrorMessage } from "@/services/dispatch-api";
+import { useDispatchOrders } from "@/hooks/use-dispatch-orders";
 
 function OrderCard({ order }: { order: DispatchOrder }) {
   const progress = getOrderProgress(order);
@@ -34,75 +32,63 @@ function OrderCard({ order }: { order: DispatchOrder }) {
       onPress={() =>
         router.push({ pathname: "/despacho/[id]", params: { id: order.id } })
       }
-      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+      className="mb-3.5 rounded-[22px] border border-line bg-surface p-[19px] active:opacity-80"
+      style={shadows.card}
     >
-      <View style={styles.row}>
-        <View style={[styles.orderIcon, completed && styles.completedIcon]}>
+      <View className="flex-row items-center gap-2">
+        <View
+          className={`h-[43px] w-[43px] items-center justify-center rounded-[14px] ${
+            completed ? "bg-secondary-light" : "bg-primary-light"
+          }`}
+        >
           <Icon
             name={completed ? "checkmark-done-outline" : "cube-outline"}
             color={completed ? colors.secondary : colors.primary}
             size={25}
           />
         </View>
-        <View style={styles.flex}>
-          <Text style={styles.orderId}>{order.id}</Text>
-          <Text style={styles.orderCaption}>Orden de despacho</Text>
+        <View className="flex-1">
+          <Text className="text-[15px] font-extrabold tracking-[0.1px] text-ink">
+            {order.id}
+          </Text>
+          <Text className="mt-1 text-[10px] text-muted">Orden de despacho</Text>
         </View>
-        <Badge
-          tone={
-            completed
-              ? "green"
-              : order.priority === "Alta"
-                ? "orange"
-                : "neutral"
-          }
-        >
-          {completed
-            ? "Completada"
-            : order.priority === "Alta"
-              ? "Prioridad alta"
-              : "Normal"}
-        </Badge>
       </View>
-      <Text style={styles.customer}>{order.customer}</Text>
-      <View style={styles.metaRow}>
-        <Icon name="location-outline" size={15} color={colors.muted} />
-        <Text style={styles.address}>{order.address}</Text>
-      </View>
-      <View style={styles.facts}>
-        <View style={styles.fact}>
+      <Text className="mb-2 mt-3 text-[18px] font-bold tracking-[-0.4px] text-ink">
+        {order.customer}
+      </Text>
+
+      <View className="mt-2 flex-row flex-wrap justify-between gap-2.5">
+        <View className="flex-row items-center gap-[5px]">
           <Icon name="layers-outline" size={15} color={colors.muted} />
-          <Text style={styles.factText}>
+          <Text className="text-[11px] text-muted">
             {order.items.length}{" "}
             {order.items.length === 1 ? "artículo" : "artículos"}
             {" · "}
             {progress.total} uds.
           </Text>
         </View>
-        <View style={styles.fact}>
+        <View className="flex-row items-center gap-[5px]">
           <Icon name="time-outline" size={15} color={colors.muted} />
-          <Text style={styles.factText}>{order.scheduledAt}</Text>
+          <Text className="text-[11px] text-muted">{order.scheduledAt}</Text>
         </View>
       </View>
       {status === "in_progress" && (
-        <View style={styles.cardProgress}>
+        <View className="mt-4 gap-[7px]">
           <ProgressBar percent={progress.percent} />
-          <Text style={styles.progressLabel}>
+          <Text className="text-[10px] text-muted">
             {progress.checked}/{progress.total} unidades verificadas
           </Text>
         </View>
       )}
-      <View style={styles.cardFooter}>
-        <View style={styles.fact}>
+      <View className="mt-[18px] flex-row items-center justify-between gap-2 border-t border-line pt-[15px]">
+        <View className="flex-row items-center gap-[5px]">
           <View
-            style={[
-              styles.statusDot,
-              {
-                backgroundColor: completed ? colors.secondary : colors.primary,
-              },
-            ]}
+            className={`mr-0.5 h-[5px] w-[5px] rounded-[3px] ${
+              completed ? "bg-secondary" : "bg-primary"
+            }`}
           />
-          <Text style={styles.statusText}>
+          <Text className="text-[11px] font-medium text-muted">
             {completed
               ? "Despacho confirmado"
               : status === "in_progress"
@@ -110,8 +96,8 @@ function OrderCard({ order }: { order: DispatchOrder }) {
                 : "Por preparar"}
           </Text>
         </View>
-        <View style={styles.fact}>
-          <Text style={styles.cardAction}>
+        <View className="flex-row items-center gap-[5px]">
+          <Text className="text-[12px] font-bold text-primary">
             {completed
               ? "Ver detalle"
               : status === "in_progress"
@@ -126,67 +112,39 @@ function OrderCard({ order }: { order: DispatchOrder }) {
 }
 
 export default function Index() {
-  const [orders, setOrders] = useState<DispatchOrder[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const requestCounter = useRef(0);
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"open" | "completed">("open");
-
-  const loadOrders = useCallback(() => {
-    const requestId = ++requestCounter.current;
-    setLoading(true);
-    setError("");
-    getDispatchOrders()
-      .then((data) => {
-        if (requestId === requestCounter.current) setOrders(data);
-      })
-      .catch((reason: unknown) => {
-        if (requestId === requestCounter.current)
-          setError(getErrorMessage(reason));
-      })
-      .finally(() => {
-        if (requestId === requestCounter.current) setLoading(false);
-      });
-    return () => {
-      requestCounter.current += 1;
-    };
-  }, []);
-
-  useFocusEffect(loadOrders);
-
-  const completed = orders.filter((order) => order.completedAt).length;
-  const pending = orders.length - completed;
-  const units = orders
-    .filter((order) => !order.completedAt)
-    .reduce((sum, order) => {
-      const { total, checked } = getOrderProgress(order);
-      return sum + total - checked;
-    }, 0);
-  const query = search.trim().toLocaleLowerCase();
-  const visibleOrders = orders.filter(
-    (order) =>
-      (filter === "completed" ? !!order.completedAt : !order.completedAt) &&
-      `${order.id} ${order.customer} ${order.address}`
-        .toLocaleLowerCase()
-        .includes(query),
-  );
+  const {
+    orders,
+    visibleOrders,
+    loading,
+    error,
+    search,
+    setSearch,
+    filter,
+    setFilter,
+    completed,
+    pending,
+    units,
+    loadOrders,
+  } = useDispatchOrders();
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "right", "left"]}>
-      <View style={styles.container}>
+    <SafeAreaView
+      className="flex-1 bg-background"
+      edges={["top", "right", "left"]}
+    >
+      <View className="w-full max-w-content flex-1 self-center">
         <FlatList
           data={visibleOrders}
           keyExtractor={(order) => order.id}
           renderItem={({ item }) => <OrderCard order={item} />}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.list}
+          contentContainerClassName="px-6 pb-10"
           refreshControl={
             <RefreshControl
               refreshing={loading && orders.length > 0}
               onRefresh={() => {
-                loadOrders();
+                void loadOrders();
               }}
               tintColor={colors.primary}
               colors={[colors.primary]}
@@ -194,12 +152,12 @@ export default function Index() {
           }
           ListHeaderComponent={
             <View>
-              <View style={styles.hero}>
-                <View style={styles.heroTop}>
-                  <View style={styles.flex}>
-                    <Text style={styles.heroTitle}>
+              <View className="mb-[30px] mt-[25px] overflow-hidden rounded-3xl bg-dark p-[21px]">
+                <View className="flex-row items-center gap-3">
+                  <View className="flex-1">
+                    <Text className="mt-2.5 text-[37px] font-bold tracking-[-1px] text-surface">
                       {loading && !orders.length ? "—" : pending}
-                      <Text style={styles.heroTitleSmall}>
+                      <Text className="text-[15px] font-medium tracking-[-0.3px]">
                         {" "}
                         {pending === 1
                           ? "orden por preparar"
@@ -207,7 +165,7 @@ export default function Index() {
                       </Text>
                     </Text>
                   </View>
-                  <View style={styles.heroIcon}>
+                  <View className="h-[57px] w-[57px] items-center justify-center rounded-[19px] bg-surface">
                     <Icon
                       name="file-tray-stacked-outline"
                       color={colors.primary}
@@ -215,28 +173,42 @@ export default function Index() {
                     />
                   </View>
                 </View>
-                <View style={styles.heroDivider} />
-                <View style={styles.heroBottom}>
-                  <View style={styles.fact}>
-                    <Icon name="cube-outline" color="#B9BEC7" size={16} />
-                    <Text style={styles.heroMeta}>
+                <View className="my-[18px] h-px bg-inverse-line" />
+                <View className="flex-row flex-wrap justify-between gap-3">
+                  <View className="flex-row items-center gap-[5px]">
+                    <Icon
+                      name="cube-outline"
+                      color={colors.inverseMuted}
+                      size={16}
+                    />
+                    <Text className="text-[11px] text-inverse-text">
                       {units} unidades pendientes
                     </Text>
                   </View>
-                  <View style={styles.fact}>
-                    <Icon name="checkmark-circle" color="#82D7AF" size={16} />
-                    <Text style={styles.heroMeta}>{completed} listas</Text>
+                  <View className="flex-row items-center gap-[5px]">
+                    <Icon
+                      name="checkmark-circle"
+                      color={colors.inverseSuccess}
+                      size={16}
+                    />
+                    <Text className="text-[11px] text-inverse-text">
+                      {completed} listas
+                    </Text>
                   </View>
                 </View>
               </View>
 
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Órdenes de despacho</Text>
-                <View style={styles.count}>
-                  <Text style={styles.countText}>{orders.length}</Text>
+              <View className="mb-4 flex-row items-center gap-[9px]">
+                <Text className="text-[20px] font-bold tracking-[-0.5px] text-ink">
+                  Órdenes de despacho
+                </Text>
+                <View className="h-6 min-w-[24px] items-center justify-center rounded-lg bg-line px-1.5">
+                  <Text className="text-[12px] font-bold text-muted">
+                    {orders.length}
+                  </Text>
                 </View>
               </View>
-              <View style={styles.search}>
+              <View className="flex-row items-center gap-2.5 rounded-[15px] border border-line bg-surface px-3.5">
                 <Icon name="search-outline" color={colors.muted} size={21} />
                 <TextInput
                   accessibilityLabel="Buscar orden o cliente"
@@ -244,7 +216,7 @@ export default function Index() {
                   onChangeText={setSearch}
                   placeholder="Buscar orden o cliente"
                   placeholderTextColor={colors.muted}
-                  style={styles.searchInput}
+                  className="min-h-[49px] flex-1 py-3 text-[13px] text-ink"
                   autoCorrect={false}
                   returnKeyType="search"
                 />
@@ -259,23 +231,22 @@ export default function Index() {
                   </Pressable>
                 )}
               </View>
-              <View style={styles.filters}>
+              <View className="mb-5 mt-[15px] flex-row gap-1 rounded-[13px] bg-segment p-1">
                 {(["open", "completed"] as const).map((value) => (
                   <Pressable
                     key={value}
                     accessibilityRole="tab"
                     accessibilityState={{ selected: filter === value }}
                     onPress={() => setFilter(value)}
-                    style={[
-                      styles.filter,
-                      filter === value && styles.filterActive,
-                    ]}
+                    className={`min-h-[42px] flex-1 items-center justify-center rounded-[10px] py-[11px] ${
+                      filter === value ? "bg-surface" : ""
+                    }`}
+                    style={filter === value ? shadows.tab : undefined}
                   >
                     <Text
-                      style={[
-                        styles.filterText,
-                        filter === value && styles.filterTextActive,
-                      ]}
+                      className={`text-[12px] font-semibold ${
+                        filter === value ? "text-ink" : "text-muted"
+                      }`}
                     >
                       {value === "open" ? "Por preparar" : "Finalizadas"}
                       {"  "}
@@ -285,13 +256,13 @@ export default function Index() {
                 ))}
               </View>
               {!!error && (
-                <View style={styles.error}>
+                <View className="mb-4 gap-3">
                   <Notice message={error} />
                   <Button
                     title="Reintentar"
                     secondary
                     onPress={() => {
-                      loadOrders();
+                      void loadOrders();
                     }}
                   />
                 </View>
@@ -301,12 +272,12 @@ export default function Index() {
           ListEmptyComponent={
             loading ? (
               <ActivityIndicator
-                style={styles.empty}
+                className="items-center gap-3 py-10"
                 size="large"
                 color={colors.primary}
               />
             ) : !error ? (
-              <View style={styles.empty}>
+              <View className="items-center gap-3 py-10">
                 <Icon
                   name={
                     search ? "search-outline" : "checkmark-done-circle-outline"
@@ -314,14 +285,14 @@ export default function Index() {
                   size={42}
                   color={colors.muted}
                 />
-                <Text style={styles.emptyTitle}>
+                <Text className="text-center text-[16px] font-semibold text-ink">
                   {search
                     ? "Sin coincidencias"
                     : filter === "completed"
                       ? "Aún no hay despachos finalizados"
                       : "¡Todo está preparado!"}
                 </Text>
-                <Text style={styles.emptyText}>
+                <Text className="text-center text-[13px] leading-5 text-muted">
                   {search
                     ? "Prueba con otro número de orden o cliente."
                     : filter === "completed"
@@ -331,281 +302,20 @@ export default function Index() {
               </View>
             ) : undefined
           }
-          ListFooterComponent={
-            <View style={styles.footer}>
-              <Icon
-                name="shield-checkmark-outline"
-                size={17}
-                color={colors.muted}
-              />
-              <Text style={styles.footerText}>
-                Un artículo a la vez. Ningún paso se queda atrás.
-              </Text>
-            </View>
-          }
+          // ListFooterComponent={
+          //   <View className="flex-row items-center justify-center gap-[7px] py-[18px]">
+          //     <Icon
+          //       name="shield-checkmark-outline"
+          //       size={17}
+          //       color={colors.muted}
+          //     />
+          //     <Text className="shrink text-[10px] text-muted">
+          //       Un artículo a la vez. Ningún paso se queda atrás.
+          //     </Text>
+          //   </View>
+          // }
         />
       </View>
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  container: { flex: 1, width: "100%", maxWidth: 680, alignSelf: "center" },
-  flex: { flex: 1 },
-  topbar: {
-    paddingHorizontal: 24,
-    paddingTop: 14,
-    paddingBottom: 20,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  row: { flexDirection: "row", alignItems: "center", gap: 12 },
-  brandMark: {
-    width: 43,
-    height: 43,
-    borderRadius: 14,
-    backgroundColor: colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  brand: {
-    fontSize: 29,
-    lineHeight: 31,
-    fontWeight: "900",
-    letterSpacing: -1.5,
-    color: colors.ink,
-  },
-  brandDot: { color: colors.primary },
-  brandCaption: {
-    fontSize: 8,
-    fontWeight: "700",
-    letterSpacing: 2.5,
-    color: colors.muted,
-  },
-  demoPill: {
-    flexDirection: "row",
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 30,
-    borderWidth: 1,
-    borderColor: colors.line,
-    backgroundColor: colors.surface,
-    alignItems: "center",
-  },
-  demoDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.secondary,
-  },
-  demoLabel: { fontSize: 11, color: colors.muted, fontWeight: "600" },
-  list: { paddingHorizontal: 24, paddingBottom: 40 },
-  eyebrow: {
-    marginTop: 8,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1.8,
-    color: colors.muted,
-  },
-  title: {
-    fontSize: 37,
-    lineHeight: 43,
-    letterSpacing: -1.6,
-    fontWeight: "800",
-    color: colors.ink,
-    marginTop: 10,
-  },
-  orange: { color: colors.primary },
-  subtitle: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: colors.muted,
-    marginTop: 10,
-  },
-  hero: {
-    padding: 21,
-    marginTop: 25,
-    marginBottom: 30,
-    backgroundColor: colors.dark,
-    borderRadius: 24,
-    overflow: "hidden",
-  },
-  heroTop: { flexDirection: "row", alignItems: "center", gap: 12 },
-  heroEyebrow: {
-    color: "#B9BEC7",
-    fontSize: 9,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-  },
-  heroTitle: {
-    color: colors.surface,
-    fontSize: 37,
-    fontWeight: "700",
-    marginTop: 10,
-    letterSpacing: -1,
-  },
-  heroTitleSmall: { fontSize: 15, fontWeight: "500", letterSpacing: -0.3 },
-  heroIcon: {
-    width: 57,
-    height: 57,
-    borderRadius: 19,
-    backgroundColor: colors.surface,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  heroDivider: { height: 1, backgroundColor: "#3C3F46", marginVertical: 18 },
-  heroBottom: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: 12,
-  },
-  heroMeta: { fontSize: 11, color: "#E1E3E7" },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    letterSpacing: -0.5,
-    fontWeight: "700",
-    color: colors.ink,
-  },
-  count: {
-    backgroundColor: colors.line,
-    minWidth: 24,
-    height: 24,
-    paddingHorizontal: 6,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  countText: { fontSize: 12, fontWeight: "700", color: colors.muted },
-  search: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 15,
-    paddingHorizontal: 14,
-  },
-  searchInput: {
-    flex: 1,
-    minHeight: 49,
-    paddingVertical: 12,
-    fontSize: 13,
-    color: colors.ink,
-  },
-  filters: {
-    flexDirection: "row",
-    backgroundColor: "#EDEEF1",
-    borderRadius: 13,
-    padding: 4,
-    gap: 4,
-    marginTop: 15,
-    marginBottom: 20,
-  },
-  filter: {
-    flex: 1,
-    minHeight: 42,
-    paddingVertical: 11,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 10,
-  },
-  filterActive: {
-    backgroundColor: colors.surface,
-    boxShadow: "0 2px 5px rgba(0, 0, 0, 0.04)",
-  },
-  filterText: { fontSize: 12, fontWeight: "600", color: colors.muted },
-  filterTextActive: { color: colors.ink },
-  card: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.line,
-    padding: 19,
-    borderRadius: 22,
-    marginBottom: 14,
-    boxShadow: "0 4px 14px rgba(24, 28, 36, 0.025)",
-  },
-  cardPressed: { opacity: 0.8 },
-  orderIcon: {
-    width: 43,
-    height: 43,
-    borderRadius: 14,
-    backgroundColor: colors.primaryLight,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  completedIcon: { backgroundColor: colors.secondaryLight },
-  orderId: {
-    fontSize: 15,
-    fontWeight: "800",
-    letterSpacing: 0.1,
-    color: colors.ink,
-  },
-  orderCaption: { fontSize: 10, color: colors.muted, marginTop: 4 },
-  customer: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: colors.ink,
-    letterSpacing: -0.4,
-    marginTop: 20,
-    marginBottom: 8,
-  },
-  metaRow: { flexDirection: "row", alignItems: "flex-start", gap: 5 },
-  address: { flex: 1, color: colors.muted, fontSize: 12, lineHeight: 17 },
-  facts: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 17,
-  },
-  fact: { flexDirection: "row", alignItems: "center", gap: 5 },
-  factText: { fontSize: 11, color: colors.muted },
-  cardProgress: { marginTop: 16, gap: 7 },
-  progressLabel: { fontSize: 10, color: colors.muted },
-  cardFooter: {
-    borderTopWidth: 1,
-    borderColor: colors.line,
-    marginTop: 18,
-    paddingTop: 15,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 8,
-  },
-  statusDot: { width: 5, height: 5, borderRadius: 3, marginRight: 2 },
-  statusText: { color: colors.muted, fontSize: 11, fontWeight: "500" },
-  cardAction: { color: colors.primaryDark, fontSize: 12, fontWeight: "700" },
-  footer: {
-    paddingVertical: 18,
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 7,
-  },
-  footerText: { flexShrink: 1, color: colors.muted, fontSize: 10 },
-  empty: { alignItems: "center", paddingVertical: 40, gap: 12 },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: colors.ink,
-    textAlign: "center",
-  },
-  emptyText: {
-    color: colors.muted,
-    fontSize: 13,
-    textAlign: "center",
-    lineHeight: 20,
-  },
-  error: { gap: 12, marginBottom: 16 },
-});

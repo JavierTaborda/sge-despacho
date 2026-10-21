@@ -1,7 +1,7 @@
 # SGE Despacho
 
 App Expo SDK 58 / React Native para preparar órdenes de despacho en una secuencia
-obligatoria. Interfaz móvil en español, con acentos naranjas, tarjetas y progreso
+obligatoria. Interfaz móvil en español, con un tema centralizado, tarjetas y progreso
 por unidad. Compatible con Android, iOS y web.
 
 ## Ejecutar
@@ -12,6 +12,63 @@ npm start
 # O vista web:
 npm run web
 ```
+
+## Lógica de la lista de órdenes
+
+[La pantalla de inicio](./src/app/index.tsx) muestra la interfaz y consume
+[el hook `useDispatchOrders`](./src/hooks/use-dispatch-orders.ts):
+
+1. Al entrar o volver a la pantalla, carga las órdenes desde el servicio.
+   `loadOrders()` permite recargarlas al deslizar o reintentar.
+2. Expone `loading` y `error` para mostrar la carga y los errores. Un contador
+   evita que respuestas antiguas o recibidas después de salir cambien el estado.
+3. `search` / `setSearch` y `filter` / `setFilter` controlan la búsqueda por
+   número, cliente o dirección y las pestañas de pendientes/finalizadas.
+   `visibleOrders` contiene el resultado que muestra la lista.
+4. `orders`, `pending`, `completed` y `units` alimentan los totales del resumen.
+   Estos valores se calculan desde las órdenes, sin mantener estados duplicados.
+
+## Estilos con NativeWind
+
+NativeWind 4.2.7 (versión estable) usa Tailwind CSS 3. La configuración de
+[Tailwind](./tailwind.config.ts) detecta clases en `src/`, y
+[el layout raíz](./src/app/_layout.tsx) importa [los estilos globales](./global.css).
+La lista de órdenes, el detalle de despacho y los componentes compartidos usan
+`className` en los componentes de React Native:
+
+```tsx
+<View className="flex-1 items-center justify-center bg-background">
+  <Text className="text-[18px] font-bold text-primary">SGE Despacho</Text>
+</View>
+```
+
+### Cambiar el tema
+
+Edita [la paleta central](./src/constants/theme.ts), como antes. Tailwind importa
+esos mismos valores: `bg-primary`, `text-primary-dark`, `bg-primary-light`,
+`text-secondary`, `bg-secondary-light`, `text-danger`, `bg-danger-light`,
+`bg-background`, `bg-surface`, `text-ink`, `text-muted` y `border-line`.
+Los iconos, indicadores de carga y controles nativos siguen usando `colors`
+desde ese archivo, sin duplicar valores.
+
+La estrategia de NativeWind es `darkMode: "class"` para permitir la carga
+asíncrona del CSS en web. Se conserva la paleta actual; no se añade modo oscuro.
+
+El ancho máximo compartido usa `max-w-content` (680 px). Metro configura
+`inlineRem: 16` para que el espaciado en clases como `p-4` sea de 16 px tanto
+en móvil como en web. Los tamaños de texto explícitos conservan la tipografía
+anterior. Los estilos nativos quedan limitados al ancho dinámico del progreso,
+las sombras `boxShadow` y los números tabulares. Las sombras y la tipografía
+numérica se centralizan en el mismo tema para preservar su aspecto con
+NativeWind 4.
+
+Después de cambiar el tema, Babel o Metro, reinicia el servidor limpiando la caché:
+
+```bash
+npx expo start --clear
+```
+
+## Backend
 
 La demo no necesita variables de entorno, Supabase, login ni un servidor.
 La [guía de autenticación](./docs/REPLICAR-SUPABASE-AUTH-AXIOS.md) queda como
@@ -36,8 +93,12 @@ cantidad usa `cantidad`, `cantped` o `1` como último respaldo.
 2. Escanea el código de barras del **artículo actual**.
 3. El endpoint de validación devuelve `valid: true` y `serial: true | false`.
    Un código incorrecto devuelve un error; **no** se interpreta como `serial: false`.
-4. Si `serial: true`, registra un serial válido y distinto por cada unidad.
-   Los seriales del mismo artículo pueden capturarse en cualquier orden.
+4. Si `serial: true`, escanea **código de barras → serial para cada unidad**.
+   Después de cada serial se vuelve a pedir el código de barras, aunque siga
+   siendo el mismo producto. Los seriales del artículo pueden capturarse en
+   cualquier orden, pero cada uno requiere su propio escaneo previo del código.
+   Un serial incorrecto, vacío o repetido también consume la validación del
+   código: vuelve a escanearlo antes de intentar otro serial.
 5. Si `serial: false`, una validación del código completa la cantidad de esa línea.
 6. Al completar la línea se habilita el siguiente artículo, nunca antes.
 7. Solo después de verificar todo puedes confirmar el despacho. Se genera un
@@ -65,6 +126,10 @@ También hay otras dos órdenes en [los fixtures](./src/data/demo-orders.ts).
 Prueba un código del segundo artículo antes de terminar el primero, un serial
 repetido o un serial de otro artículo: el flujo debe bloquearlos.
 
+Para las dos unidades del monitor, el orden es `7801234567012` →
+`MSV2200-24081` → `7801234567012` → `MSV2200-24082`. Escanear el segundo
+serial sin volver a validar el código de barras debe rechazarse.
+
 **Persistencia de la demo:** el servidor simulado vive en memoria. El avance se
 conserva al navegar entre pantallas, pero se reinicia al recargar o cerrar la app.
 No es un sistema de despacho de producción ni un modo offline persistente.
@@ -85,7 +150,16 @@ definía endpoints de despacho; este es el contrato de prueba propuesto:
 
 Errores: `400` para peticiones incompletas, `404` para órdenes/rutas desconocidas,
 `409` para saltos de secuencia, duplicados o confirmaciones prematuras, `422` para
-códigos o seriales incorrectos. El cuerpo de error es `{ message: string }`.
+códigos o seriales incorrectos. El cuerpo de error es
+`{ message: string, order?: DispatchOrder }`. Los rechazos de escaneo incluyen
+la orden actualizada para sincronizar la pantalla.
+
+En artículos con serial, `barcodeChecked` significa que hay una validación
+pendiente para **un solo intento de serial**. Cada intento la consume, sea
+válido o rechazado. La finalización de esa línea depende de sus seriales
+capturados, no de mantener ese indicador activo. Revalidar el mismo código
+correcto renueva la autorización sin acumular permisos ni aumentar el progreso;
+un código incorrecto la revoca.
 
 Las respuestas incluyen el estado actualizado y los seriales capturados, pero no
 la lista de seriales esperados. Los valores sugeridos para probar pertenecen
@@ -94,7 +168,9 @@ exclusivamente a los fixtures demo.
 Para integrar el backend, reemplaza el adaptador con la URL real y el interceptor
 de sesión del documento adjunto; retira los controles y fixtures demo. El backend
 real debe conservar las validaciones transaccionales de secuencia, cantidades,
-duplicados y confirmación. Las validaciones no pueden depender solo de la UI.
+duplicados y confirmación, y consumir la autorización del código antes de
+validar cada serial. También debe devolver la orden actualizada en los rechazos
+de escaneo. Las validaciones no pueden depender solo de la UI.
 
 ## Validación
 

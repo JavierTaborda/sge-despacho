@@ -3,7 +3,6 @@ import type { ComponentProps, ReactNode } from "react";
 import {
   ActivityIndicator,
   Pressable,
-  StyleSheet,
   Text,
   View,
 } from "react-native";
@@ -55,19 +54,20 @@ export function Button({
       accessibilityState={{ disabled: disabled || loading, busy: loading }}
       disabled={disabled || loading}
       onPress={onPress}
-      style={({ pressed }) => [
-        styles.button,
-        secondary && styles.secondary,
-        (disabled || loading) && styles.disabled,
-        pressed && styles.pressed,
-      ]}
+      className={`min-h-[54px] flex-row items-center justify-center gap-2.5 rounded-[17px] px-5 py-[15px] active:scale-[0.99] active:opacity-80 ${
+        secondary ? "border border-line bg-background" : "bg-primary"
+      } ${disabled || loading ? "opacity-50" : ""}`}
     >
       {loading ? (
         <ActivityIndicator color={foreground} />
       ) : icon ? (
         <Icon name={icon} color={foreground} size={20} />
       ) : null}
-      <Text style={[styles.buttonText, { color: foreground }]}>{title}</Text>
+      <Text
+        className={`text-[15px] font-bold ${secondary ? "text-ink" : "text-surface"}`}
+      >
+        {title}
+      </Text>
     </Pressable>
   );
 }
@@ -81,18 +81,22 @@ export function Badge({
 }) {
   return (
     <View
-      style={[
-        styles.badge,
-        tone === "orange" && { backgroundColor: colors.primaryLight },
-        tone === "green" && { backgroundColor: colors.secondaryLight },
-      ]}
+      className={`self-start rounded-lg px-[9px] py-[5px] ${
+        tone === "orange"
+          ? "bg-primary-light"
+          : tone === "green"
+            ? "bg-secondary-light"
+            : "bg-background"
+      }`}
     >
       <Text
-        style={[
-          styles.badgeText,
-          tone === "orange" && { color: colors.primaryDark },
-          tone === "green" && { color: colors.secondary },
-        ]}
+        className={`text-[11px] font-bold ${
+          tone === "orange"
+            ? "text-primary-dark"
+            : tone === "green"
+              ? "text-secondary"
+              : "text-muted"
+        }`}
       >
         {children}
       </Text>
@@ -105,9 +109,12 @@ export function ProgressBar({ percent }: { percent: number }) {
     <View
       accessibilityRole="progressbar"
       accessibilityValue={{ min: 0, max: 100, now: percent }}
-      style={styles.progressTrack}
+      className="h-1.5 overflow-hidden rounded-[5px] bg-line"
     >
-      <View style={[styles.progressFill, { width: `${percent}%` }]} />
+      <View
+        className="h-full rounded-[5px] bg-primary"
+        style={{ width: `${percent}%` }}
+      />
     </View>
   );
 }
@@ -124,66 +131,22 @@ export function Notice({
     <View
       accessibilityRole="alert"
       accessibilityLiveRegion="polite"
-      style={[
-        styles.notice,
-        { backgroundColor: success ? colors.secondaryLight : colors.redLight },
-      ]}
+      className={`flex-row items-start gap-[9px] rounded-[14px] p-3.5 ${
+        success ? "bg-secondary-light" : "bg-danger-light"
+      }`}
     >
       <Icon
         name={success ? "checkmark-circle" : "alert-circle"}
         color={color}
         size={21}
       />
-      <Text style={[styles.noticeText, { color }]}>{message}</Text>
+      <Text
+        className={`flex-1 text-[13px] font-medium leading-[19px] ${
+          success ? "text-secondary" : "text-danger"
+        }`}
+      >
+        {message}
+      </Text>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  button: {
-    minHeight: 54,
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderRadius: 17,
-    backgroundColor: colors.primary,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-  },
-  secondary: {
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.line,
-  },
-  disabled: { opacity: 0.5 },
-  pressed: { opacity: 0.8, transform: [{ scale: 0.99 }] },
-  buttonText: { fontSize: 15, fontWeight: "700" },
-  badge: {
-    alignSelf: "flex-start",
-    backgroundColor: colors.background,
-    borderRadius: 8,
-    paddingVertical: 5,
-    paddingHorizontal: 9,
-  },
-  badgeText: { color: colors.muted, fontSize: 11, fontWeight: "700" },
-  progressTrack: {
-    height: 6,
-    borderRadius: 5,
-    backgroundColor: colors.line,
-    overflow: "hidden",
-  },
-  progressFill: {
-    height: "100%",
-    borderRadius: 5,
-    backgroundColor: colors.primary,
-  },
-  notice: {
-    flexDirection: "row",
-    gap: 9,
-    padding: 14,
-    borderRadius: 14,
-    alignItems: "flex-start",
-  },
-  noticeText: { flex: 1, fontSize: 13, lineHeight: 19, fontWeight: "500" },
-});

@@ -24,6 +24,7 @@ export type DispatchItem = Dtpredes & {
   quantity: number;
   location: string;
   requiresSerial: boolean;
+  // For serialized items, this authorizes only the next serial attempt.
   barcodeChecked: boolean;
   serials: string[];
 };
@@ -63,7 +64,6 @@ export type DispatchOrder = Cbpredes & {
   customer: string;
   address: string;
   scheduledAt: string;
-  priority: "Alta" | "Normal";
   items: DispatchItem[];
   completedAt: string | null;
 };
@@ -78,19 +78,20 @@ export type DemoOrder = Omit<DispatchOrder, keyof Cbpredes | "items" | "complete
 
 export class DispatchError extends Error {
   readonly status: number;
+  readonly order?: DispatchOrder;
 
-  constructor(message: string, status = 422) {
+  constructor(message: string, status = 422, order?: DispatchOrder) {
     super(message);
     this.name = "DispatchError";
     this.status = status;
+    this.order = order ? copyOrder(order) : undefined;
   }
 }
 
 export function isItemComplete(item: DispatchItem) {
-  return (
-    item.barcodeChecked &&
-    (!item.requiresSerial || item.serials.length === item.quantity)
-  );
+  return item.requiresSerial
+    ? item.serials.length === item.quantity
+    : item.barcodeChecked;
 }
 
 export function getCurrentItem(order: DispatchOrder) {
@@ -114,7 +115,9 @@ export function getOrderProgress(order: DispatchOrder) {
 
 export function getOrderStatus(order: DispatchOrder) {
   if (order.completedAt) return "completed";
-  return order.items.some((item) => item.barcodeChecked) ? "in_progress" : "pending";
+  return order.items.some((item) => item.barcodeChecked || item.serials.length > 0)
+    ? "in_progress"
+    : "pending";
 }
 
 function copyOrder(order: DispatchOrder): DispatchOrder {
@@ -184,13 +187,14 @@ export function createDispatchStore(seeds: DemoOrder[]) {
   function requireCurrentItem(orderId: string, itemId: string) {
     const order = findOrder(orderId);
     if (order.completedAt) {
-      throw new DispatchError("Esta orden ya fue despachada.", 409);
+      throw new DispatchError("Esta orden ya fue despachada.", 409, order);
     }
     const item = getCurrentItem(order);
     if (!item || item.id !== itemId) {
       throw new DispatchError(
         "No puedes saltar artículos. Completa el artículo actual antes de continuar.",
         409,
+        order,
       );
     }
     return { order, item };
@@ -209,12 +213,12 @@ export function createDispatchStore(seeds: DemoOrder[]) {
     getOrder: (orderId: string) => copyOrder(findOrder(orderId)),
     checkBarcode(orderId: string, itemId: string, barcode: string) {
       const { order, item } = requireCurrentItem(orderId, itemId);
-      if (item.barcodeChecked) {
-        throw new DispatchError("El código ya fue validado. Escanea los seriales.", 409);
-      }
+      item.barcodeChecked = false;
       if (barcode.trim() !== item.barcode) {
         throw new DispatchError(
           `Código incorrecto. Debes escanear el artículo: ${item.name}.`,
+          422,
+          order,
         );
       }
       item.barcodeChecked = true;
@@ -223,19 +227,28 @@ export function createDispatchStore(seeds: DemoOrder[]) {
     checkSerial(orderId: string, itemId: string, input: string) {
       const { order, item } = requireCurrentItem(orderId, itemId);
       if (!item.barcodeChecked || !item.requiresSerial) {
-        throw new DispatchError("Primero valida el código de barras del artículo.", 409);
+        throw new DispatchError(
+          "Primero valida el código de barras de esta unidad.",
+          409,
+          order,
+        );
       }
+      item.barcodeChecked = false;
       const serial = input.trim().toUpperCase();
-      if (!serial) throw new DispatchError("Escanea o escribe un serial.");
+      if (!serial) throw new DispatchError("Escanea o escribe un serial.", 422, order);
       if (
         orders.some((entry) =>
           entry.items.some((line) => line.serials.includes(serial)),
         )
       ) {
-        throw new DispatchError("Este serial ya fue registrado. Escanea uno diferente.", 409);
+        throw new DispatchError(
+          "Este serial ya fue registrado. Escanea uno diferente.",
+          409,
+          order,
+        );
       }
       if (!expectedSerials(orderId, itemId).includes(serial)) {
-        throw new DispatchError("Este serial no pertenece al artículo actual.");
+        throw new DispatchError("Este serial no pertenece al artículo actual.", 422, order);
       }
       item.serials.push(serial);
       return { valid: true, order: copyOrder(order) };
