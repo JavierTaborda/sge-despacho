@@ -146,7 +146,13 @@ export async function completeDispatch(orderId: string) {
   return data.order;
 }
 
-export const getDemoCode = (order: DispatchOrder) => store.getDemoCode(order);
+export const getDemoCode = (order: DispatchOrder) => {
+  try {
+    return store.getDemoCode(order);
+  } catch {
+    return null;
+  }
+};
 
 export function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;

@@ -1,4 +1,22 @@
-export type DispatchItem = {
+export type Dtpredes = {
+  prednum: number;
+  itemnum: number;
+  pednum: number;
+  rennum: number;
+  codart: string;
+  compuesto: boolean;
+  manjser: boolean;
+  codalma: string;
+  codbarra: string | null;
+  serial1: string | null;
+  refbarra: string | null;
+  recouser: number;
+  horacapture: string | null;
+};
+
+export type Mvpredes = Dtpredes;
+
+export type DispatchItem = Dtpredes & {
   id: string;
   name: string;
   sku: string;
@@ -10,7 +28,37 @@ export type DispatchItem = {
   serials: string[];
 };
 
-export type DispatchOrder = {
+export type Cbpredes = {
+  prednum: number;
+  pednum: number;
+  profite: boolean;
+  estatus: number;
+  fecemis: string;
+  fecdesp: string;
+  fecfinal: string | null;
+  horainicio: string | null;
+  horafinal: string | null;
+  codcli: string;
+  codzon: string;
+  codven: string;
+  cantped: number;
+  cantreng: number;
+  cantdesp: number;
+  cantcarga: number;
+  totneto: number;
+  parcial: boolean;
+  compuesto: boolean;
+  codtrans: string | null;
+  codchofer: number;
+  placa: string | null;
+  cerrado: boolean;
+  anulado: boolean;
+  proceso: boolean;
+  comentario: string | null;
+  owneruser: number;
+};
+
+export type DispatchOrder = Cbpredes & {
   id: string;
   customer: string;
   address: string;
@@ -20,11 +68,11 @@ export type DispatchOrder = {
   completedAt: string | null;
 };
 
-export type DemoItem = Omit<DispatchItem, "barcodeChecked" | "serials"> & {
+export type DemoItem = Omit<DispatchItem, keyof Dtpredes | "barcodeChecked" | "serials"> & {
   expectedSerials: string[];
 };
 
-export type DemoOrder = Omit<DispatchOrder, "items" | "completedAt"> & {
+export type DemoOrder = Omit<DispatchOrder, keyof Cbpredes | "items" | "completedAt"> & {
   items: DemoItem[];
 };
 
@@ -78,9 +126,49 @@ function copyOrder(order: DispatchOrder): DispatchOrder {
 
 export function createDispatchStore(seeds: DemoOrder[]) {
   const orders: DispatchOrder[] = seeds.map((seed) => ({
+    prednum: Number(seed.id.replace(/\D/g, "")) || 0,
+    pednum: Number(seed.id.replace(/\D/g, "")) || 0,
+    profite: false,
+    estatus: 0,
+    fecemis: "",
+    fecdesp: seed.scheduledAt,
+    fecfinal: null,
+    horainicio: null,
+    horafinal: null,
+    codcli: seed.customer,
+    codzon: seed.address,
+    codven: "",
+    cantped: seed.items.length,
+    cantreng: seed.items.length,
+    cantdesp: 0,
+    cantcarga: 0,
+    totneto: 0,
+    parcial: false,
+    compuesto: false,
+    codtrans: null,
+    codchofer: 0,
+    placa: null,
+    cerrado: false,
+    anulado: false,
+    proceso: false,
+    comentario: null,
+    owneruser: 1,
     ...seed,
     completedAt: null,
-    items: seed.items.map(({ expectedSerials: _, ...item }) => ({
+    items: seed.items.map(({ expectedSerials: _, ...item }, index) => ({
+      prednum: Number(seed.id.replace(/\D/g, "")) || 0,
+      itemnum: index + 1,
+      pednum: Number(seed.id.replace(/\D/g, "")) || 0,
+      rennum: index + 1,
+      codart: item.sku,
+      compuesto: false,
+      manjser: item.requiresSerial,
+      codalma: item.location,
+      codbarra: item.barcode,
+      serial1: null,
+      refbarra: null,
+      recouser: 1,
+      horacapture: null,
       ...item,
       barcodeChecked: false,
       serials: [],

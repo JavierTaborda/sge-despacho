@@ -2,6 +2,25 @@ import type { DemoOrder } from "../domain/dispatch.ts";
 
 export const demoOrders: DemoOrder[] = [
   {
+    id: "603011",
+    customer: "COFR-20",
+    address: "N010001",
+    scheduledAt: "Sin fecha de despacho",
+    priority: "Normal",
+    items: [
+      {
+        id: "603011-1",
+        name: "Artículo 7590020007170",
+        sku: "7590020007170",
+        barcode: "7590020007170",
+        quantity: 1,
+        location: "Sin ubicación",
+        requiresSerial: false,
+        expectedSerials: [],
+      },
+    ],
+  },
+  {
     id: "OD-1048",
     customer: "Clínica Santa María",
     address: "Av. Providencia 1250, Santiago",
@@ -83,3 +102,4 @@ export const demoOrders: DemoOrder[] = [
 
 
 
+ 

@@ -23,9 +23,9 @@ function setup() {
 test("returns test orders without exposing expected serials or mutable internal state", () => {
   const store = setup();
   const orders = store.getOrders();
-  assert.equal(orders.length, 3);
+  assert.equal(orders.length, 4);
   assert.equal(getOrderStatus(orders[0]), "pending");
-  assert.deepEqual(getOrderProgress(orders[0]), { checked: 0, total: 5, percent: 0 });
+  assert.deepEqual(getOrderProgress(orders[0]), { checked: 0, total: 1, percent: 0 });
   assert.equal("expectedSerials" in orders[0].items[0], false);
   orders[0].items[0].barcodeChecked = true;
   orders[0].items[0].serials.push("INVALID");
@@ -42,7 +42,7 @@ test("maps cbpredes and mvpredes rows to dispatch orders", () => {
       codzon: "N01000",
       fecdesp: "2026-10-21",
     }],
-    mvpredes: [{
+    dtpredes: [{
       prednum: 603011,
       itemnum: 1,
       codart: "7590020007170",
@@ -133,7 +133,7 @@ test("full sequential flow, confirmation, idempotence, and completed order prote
     assert.throws(() => store.checkBarcode(seed.id, seed.items[0].id, seed.items[0].barcode), /ya fue despachada/);
     assert.throws(() => store.checkSerial(seed.id, seed.items[0].id, "ANY"), /ya fue despachada/);
   }
-  assert.equal(store.getOrders().filter((order) => order.completedAt).length, 3);
+  assert.equal(store.getOrders().filter((order) => order.completedAt).length, 4);
 });
 
 test("unknown orders return an explicit 404", () => {
@@ -149,7 +149,7 @@ test("Axios mock handles real JSON-transformed requests and error responses", as
   const api = create({ adapter: createMockAdapter(store, 0) });
   const list = await api.get("/ordenes-despacho");
   assert.equal(list.status, 200);
-  assert.equal(list.data.orders.length, 3);
+  assert.equal(list.data.orders.length, 4);
   const detail = await api.get("/ordenes-despacho/OD-1048");
   assert.equal(detail.data.order.id, "OD-1048");
   const scan = await api.post("/check-codigo-barra", {

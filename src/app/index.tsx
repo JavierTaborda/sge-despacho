@@ -1,23 +1,23 @@
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    FlatList,
-    Pressable,
-    RefreshControl,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Badge, Button, Icon, Notice, ProgressBar } from "@/components/ui";
 import { colors } from "@/constants/theme";
 import {
-    getOrderProgress,
-    getOrderStatus,
-    type DispatchOrder,
+  getOrderProgress,
+  getOrderStatus,
+  type DispatchOrder,
 } from "@/domain/dispatch";
 import { getDispatchOrders, getErrorMessage } from "@/services/dispatch-api";
 
@@ -175,23 +175,6 @@ export default function Index() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "right", "left"]}>
       <View style={styles.container}>
-        <View style={styles.topbar}>
-          <View style={styles.row}>
-            <View style={styles.brandMark}>
-              <Icon name="paper-plane" color="white" size={22} />
-            </View>
-            <View>
-              <Text style={styles.brand}>
-                sge<Text style={styles.brandDot}>.</Text>
-              </Text>
-              <Text style={styles.brandCaption}>DESPACHO</Text>
-            </View>
-          </View>
-          <View style={styles.demoPill}>
-            <View style={styles.demoDot} />
-            <Text style={styles.demoLabel}>Modo demo</Text>
-          </View>
-        </View>
         <FlatList
           data={visibleOrders}
           keyExtractor={(order) => order.id}
@@ -211,18 +194,9 @@ export default function Index() {
           }
           ListHeaderComponent={
             <View>
-              <Text style={styles.eyebrow}>CENTRO DE OPERACIONES</Text>
-              <Text style={styles.title}>
-                Cada despacho,{"\n"}en orden<Text style={styles.orange}>.</Text>
-              </Text>
-              <Text style={styles.subtitle}>
-                Prepara. Verifica. Despacha con confianza.
-              </Text>
-
               <View style={styles.hero}>
                 <View style={styles.heroTop}>
                   <View style={styles.flex}>
-                    <Text style={styles.heroEyebrow}>TU JORNADA DE HOY</Text>
                     <Text style={styles.heroTitle}>
                       {loading && !orders.length ? "—" : pending}
                       <Text style={styles.heroTitleSmall}>
@@ -236,7 +210,7 @@ export default function Index() {
                   <View style={styles.heroIcon}>
                     <Icon
                       name="file-tray-stacked-outline"
-                      color="#FFAD84"
+                      color={colors.primary}
                       size={30}
                     />
                   </View>
@@ -478,7 +452,7 @@ const styles = StyleSheet.create({
     width: 57,
     height: 57,
     borderRadius: 19,
-    backgroundColor: "#3F322D",
+    backgroundColor: colors.surface,
     alignItems: "center",
     justifyContent: "center",
   },

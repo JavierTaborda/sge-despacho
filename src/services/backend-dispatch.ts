@@ -1,10 +1,29 @@
 import type { DispatchOrder } from "../domain/dispatch.ts";
 
-export type BackendDispatchHeader = {
+export type CbpredesPayload = {
   prednum: number | string;
   pednum?: number | string | null;
+  profite?: number | boolean | null;
+  estatus?: number | null;
+  fecemis?: string | null;
   codcli?: string | null;
   codzon?: string | null;
+  codven?: string | null;
+  horainicio?: string | null;
+  horafinal?: string | null;
+  cantped?: number | null;
+  cantreng?: number | null;
+  cantdesp?: number | null;
+  cantcarga?: number | null;
+  totneto?: number | string | null;
+  parcial?: number | boolean | null;
+  compuesto?: number | boolean | null;
+  codtrans?: string | null;
+  codchofer?: number | null;
+  placa?: string | null;
+  proceso?: number | boolean | null;
+  comentario?: string | null;
+  owneruser?: number | null;
   fecdesp?: string | null;
   fecfinal?: string | null;
   cerrado?: number | boolean | null;
@@ -13,29 +32,31 @@ export type BackendDispatchHeader = {
   direccion?: string | null;
 };
 
-export type BackendDispatchLine = {
+export type DtpredesPayload = {
   prednum: number | string;
-  itemnum?: number | string | null;
+  itemnum: number | string;
+  pednum?: number | string | null;
+  rennum?: number | string | null;
   codart?: string | null;
-  codbarra?: string | null;
-  refbarra?: string | null;
-  codalma?: string | null;
+  compuesto?: number | boolean | null;
   manjser?: number | boolean | null;
+  codalma?: string | null;
+  codbarra?: string | null;
   serial1?: string | null;
-  cantidad?: number | null;
-  cantped?: number | null;
-  nombre?: string | null;
-  descripcion?: string | null;
+  refbarra?: string | null;
+  recouser?: number | null;
+  horacapture?: string | null;
 };
 
 type BackendDispatchPayload = {
-  headers?: BackendDispatchHeader[];
-  cabeceras?: BackendDispatchHeader[];
-  cbpredes?: BackendDispatchHeader[];
-  lines?: BackendDispatchLine[];
-  items?: BackendDispatchLine[];
-  detalles?: BackendDispatchLine[];
-  mvpredes?: BackendDispatchLine[];
+  headers?: CbpredesPayload[];
+  cabeceras?: CbpredesPayload[];
+  cbpredes?: CbpredesPayload[];
+  lines?: DtpredesPayload[];
+  items?: DtpredesPayload[];
+  detalles?: DtpredesPayload[];
+  dtpredes?: DtpredesPayload[];
+  mvpredes?: DtpredesPayload[];
 };
 
 function text(value: unknown, fallback: string) {
@@ -43,7 +64,8 @@ function text(value: unknown, fallback: string) {
 }
 
 function number(value: unknown, fallback: number) {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function isEnabled(value: unknown) {
@@ -55,32 +77,85 @@ function headerRows(payload: BackendDispatchPayload) {
 }
 
 function lineRows(payload: BackendDispatchPayload) {
-  return payload.lines ?? payload.items ?? payload.detalles ?? payload.mvpredes ?? [];
+  return payload.lines
+    ?? payload.items
+    ?? payload.detalles
+    ?? payload.dtpredes
+    ?? payload.mvpredes
+    ?? [];
 }
 
-function mapHeader(header: BackendDispatchHeader, lines: BackendDispatchLine[]): DispatchOrder {
+function mapHeader(header: CbpredesPayload, lines: DtpredesPayload[]): DispatchOrder {
   const orderId = String(header.prednum);
   const orderLines = lines.filter((line) => String(line.prednum) === orderId);
   const completed = header.fecfinal ?? (isEnabled(header.cerrado) ? header.fecdesp : null);
+  const firstLineByArticle = new Map<string, DtpredesPayload[]>();
+  for (const line of orderLines) {
+    const key = `${line.itemnum}:${line.codart ?? ""}:${line.codbarra ?? line.refbarra ?? ""}`;
+    firstLineByArticle.set(key, [...(firstLineByArticle.get(key) ?? []), line]);
+  }
 
   return {
+    prednum: number(header.prednum, 0),
+    pednum: number(header.pednum, 0),
+    profite: isEnabled(header.profite),
+    estatus: number(header.estatus, 0),
+    fecemis: text(header.fecemis, ""),
+    fecdesp: text(header.fecdesp, ""),
+    fecfinal: header.fecfinal ?? null,
+    horainicio: header.horainicio ?? null,
+    horafinal: header.horafinal ?? null,
+    codcli: text(header.codcli, ""),
+    codzon: text(header.codzon, ""),
+    codven: text(header.codven, ""),
+    cantped: number(header.cantped, 1),
+    cantreng: number(header.cantreng, orderLines.length),
+    cantdesp: number(header.cantdesp, 0),
+    cantcarga: number(header.cantcarga, 0),
+    totneto: number(header.totneto, 0),
+    parcial: isEnabled(header.parcial),
+    compuesto: isEnabled(header.compuesto),
+    codtrans: header.codtrans ?? null,
+    codchofer: number(header.codchofer, 0),
+    placa: header.placa ?? null,
+    cerrado: isEnabled(header.cerrado),
+    anulado: isEnabled(header.anulado),
+    proceso: isEnabled(header.proceso),
+    comentario: header.comentario ?? null,
+    owneruser: number(header.owneruser, 1),
     id: orderId,
     customer: text(header.cliente, text(header.codcli, "Cliente sin nombre")),
     address: text(header.direccion, text(header.codzon, "Zona no informada")),
     scheduledAt: text(header.fecdesp, "Sin fecha de despacho"),
     priority: "Normal",
     completedAt: completed ?? null,
-    items: orderLines.map((line, index) => {
+    items: [...firstLineByArticle.values()].map((lineGroup, index) => {
+      const line = lineGroup[0];
       const barcode = text(line.codbarra, text(line.refbarra, ""));
-      const serial = text(line.serial1, "");
+      const expectedSerials = lineGroup
+        .map((entry) => text(entry.serial1, ""))
+        .filter(Boolean);
       return {
+        prednum: number(line.prednum, number(header.prednum, 0)),
+        itemnum: number(line.itemnum, index + 1),
+        pednum: number(line.pednum, number(header.pednum, 0)),
+        rennum: number(line.rennum, 0),
+        codart: text(line.codart, ""),
+        compuesto: isEnabled(line.compuesto),
+        manjser: isEnabled(line.manjser),
+        codalma: text(line.codalma, ""),
+        codbarra: line.codbarra ?? null,
+        serial1: line.serial1 ?? null,
+        refbarra: line.refbarra ?? null,
+        recouser: number(line.recouser, 1),
+        horacapture: line.horacapture ?? null,
         id: `${orderId}-${text(line.itemnum, String(index + 1))}`,
-        name: text(line.nombre, text(line.descripcion, text(line.codart, "Artículo sin descripción"))),
+        name: text(line.codart, "Artículo sin descripción"),
         sku: text(line.codart, "SIN SKU"),
         barcode,
-        quantity: Math.max(1, number(line.cantidad ?? line.cantped, 1)),
+        quantity: Math.max(1, lineGroup.length),
         location: text(line.codalma, "Sin ubicación"),
-        requiresSerial: isEnabled(line.manjser) || Boolean(serial),
+        requiresSerial: isEnabled(line.manjser) || expectedSerials.length > 0,
         barcodeChecked: false,
         serials: [],
       };
