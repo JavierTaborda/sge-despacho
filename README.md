@@ -1,56 +1,110 @@
-# Welcome to your Expo app 👋
+# SGE Despacho
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+App Expo SDK 58 / React Native para preparar órdenes de despacho en una secuencia
+obligatoria. Interfaz móvil en español, con acentos naranjas, tarjetas y progreso
+por unidad. Compatible con Android, iOS y web.
 
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Ejecutar
 
 ```bash
-npm run reset-project
+npm install
+npm start
+# O vista web:
+npm run web
 ```
 
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
+La demo no necesita variables de entorno, Supabase, login ni un servidor.
+La [guía de autenticación](./docs/REPLICAR-SUPABASE-AUTH-AXIOS.md) queda como
+referencia para la futura integración real.
 
-### Other setup steps
+Para conectar el backend real, define `EXPO_PUBLIC_API_URL` y reinicia Expo:
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```env
+EXPO_PUBLIC_API_URL=https://tu-api.example.com/api
+```
 
-## Learn more
+El endpoint `GET /ordenes-despacho` puede devolver `{ orders }` con el modelo de
+la app o `{ cbpredes, mvpredes }` con las filas de las tablas. En el segundo caso
+se usa `prednum` como despacho, `itemnum` como línea, `codbarra` antes que
+`refbarra`, `codalma` como ubicación y `manjser`/`serial1` para determinar si se
+requieren seriales. La descripción usa `nombre`, `descripcion` o `codart`; la
+cantidad usa `cantidad`, `cantped` o `1` como último respaldo.
 
-To learn more about developing your project with Expo, look at the following resources:
+## Flujo
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+1. Selecciona una orden. Puedes buscar por número, cliente o dirección.
+2. Escanea el código de barras del **artículo actual**.
+3. El endpoint de validación devuelve `valid: true` y `serial: true | false`.
+   Un código incorrecto devuelve un error; **no** se interpreta como `serial: false`.
+4. Si `serial: true`, registra un serial válido y distinto por cada unidad.
+   Los seriales del mismo artículo pueden capturarse en cualquier orden.
+5. Si `serial: false`, una validación del código completa la cantidad de esa línea.
+6. Al completar la línea se habilita el siguiente artículo, nunca antes.
+7. Solo después de verificar todo puedes confirmar el despacho. Se genera un
+   comprobante demo y la orden aparece en **Finalizadas**.
 
-## Join the community
+La pistola debe funcionar como teclado USB/Bluetooth (HID), con terminador Enter.
+Toca el campo de código para darle foco y escanea. También puedes escribir y
+validar manualmente. La app conserva el foco después de cada captura desde el
+lector. No se usa la cámara ni se solicitan permisos.
 
-Join our community of developers creating universal apps.
+El botón **Usar código de prueba** envía el siguiente código válido al mismo
+endpoint y pasa por las mismas validaciones; no salta pasos.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Datos de prueba
+
+En la orden **OD-1048**:
+
+| Paso | Artículo                  | Código de barras | Cantidad | Seriales válidos                 |
+| ---- | ------------------------- | ---------------- | -------- | -------------------------------- |
+| 1    | Monitor de signos vitales | `7801234567012`  | 2        | `MSV2200-24081`, `MSV2200-24082` |
+| 2    | Sensor de temperatura     | `7801234567029`  | 2        | Sin serial                       |
+| 3    | Oxímetro de pulso         | `7801234567050`  | 1        | `OP50-88301`                     |
+
+También hay otras dos órdenes en [los fixtures](./src/data/demo-orders.ts).
+Prueba un código del segundo artículo antes de terminar el primero, un serial
+repetido o un serial de otro artículo: el flujo debe bloquearlos.
+
+**Persistencia de la demo:** el servidor simulado vive en memoria. El avance se
+conserva al navegar entre pantallas, pero se reinicia al recargar o cerrar la app.
+No es un sistema de despacho de producción ni un modo offline persistente.
+
+## API simulada
+
+[El servicio Axios](./src/services/dispatch-api.ts) utiliza un adaptador local con
+400 ms de latencia. **No hace peticiones HTTP reales.** El documento adjunto no
+definía endpoints de despacho; este es el contrato de prueba propuesto:
+
+| Método | Endpoint                          | Cuerpo                      | Respuesta                                 |
+| ------ | --------------------------------- | --------------------------- | ----------------------------------------- |
+| GET    | `/ordenes-despacho`               | —                           | `{ orders: DispatchOrder[] }`             |
+| GET    | `/ordenes-despacho/:id`           | —                           | `{ order: DispatchOrder }`                |
+| POST   | `/check-codigo-barra`             | `{ orderId, itemId, code }` | `{ valid: true, serial: boolean, order }` |
+| POST   | `/check-serial`                   | `{ orderId, itemId, code }` | `{ valid: true, order }`                  |
+| POST   | `/ordenes-despacho/:id/confirmar` | —                           | `{ order }`                               |
+
+Errores: `400` para peticiones incompletas, `404` para órdenes/rutas desconocidas,
+`409` para saltos de secuencia, duplicados o confirmaciones prematuras, `422` para
+códigos o seriales incorrectos. El cuerpo de error es `{ message: string }`.
+
+Las respuestas incluyen el estado actualizado y los seriales capturados, pero no
+la lista de seriales esperados. Los valores sugeridos para probar pertenecen
+exclusivamente a los fixtures demo.
+
+Para integrar el backend, reemplaza el adaptador con la URL real y el interceptor
+de sesión del documento adjunto; retira los controles y fixtures demo. El backend
+real debe conservar las validaciones transaccionales de secuencia, cantidades,
+duplicados y confirmación. Las validaciones no pueden depender solo de la UI.
+
+## Validación
+
+```bash
+npm run lint
+npx tsc --noEmit
+npm test
+```
+
+Las pruebas de dominio y del adaptador Axios usan el runner nativo de Node
+(Node 22.18+ o 24 recomendado), sin dependencias de testing adicionales.
+La carpeta `example/` es el starter archivado y no forma parte de la app ni del
+typecheck.
