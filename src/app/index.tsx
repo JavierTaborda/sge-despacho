@@ -1,21 +1,21 @@
 import { router } from "expo-router";
 import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  RefreshControl,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    FlatList,
+    Pressable,
+    RefreshControl,
+    Text,
+    TextInput,
+    View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Button, Icon, Notice, ProgressBar } from "@/components/ui";
 import { colors, shadows } from "@/constants/theme";
 import {
-  getOrderProgress,
-  getOrderStatus,
-  type DispatchOrder,
+    getOrderProgress,
+    getOrderStatus,
+    type DispatchOrder,
 } from "@/domain/dispatch";
 import { useDispatchOrders } from "@/hooks/use-dispatch-orders";
 
@@ -37,28 +37,42 @@ function OrderCard({ order }: { order: DispatchOrder }) {
     >
       <View className="flex-row items-center gap-2">
         <View
-          className={`h-[43px] w-[43px] items-center justify-center rounded-[14px] ${
+          className={`h-[35px] w-[35px] items-center justify-center rounded-[12px] ${
             completed ? "bg-secondary-light" : "bg-primary-light"
           }`}
         >
           <Icon
             name={completed ? "checkmark-done-outline" : "cube-outline"}
             color={completed ? colors.secondary : colors.primary}
-            size={25}
+            size={20}
           />
         </View>
         <View className="flex-1">
           <Text className="text-[15px] font-extrabold tracking-[0.1px] text-ink">
             {order.id}
           </Text>
-          <Text className="mt-1 text-[10px] text-muted">Orden de despacho</Text>
+          <Text className="mt-1 text-[10px] text-muted">
+            Predespacho · Pedido {order.pednum}
+          </Text>
         </View>
       </View>
-      <Text className="mb-2 mt-3 text-[18px] font-bold tracking-[-0.4px] text-ink">
+      <Text className="mb-2 mt-1 text-[18px] font-bold tracking-[-0.4px] text-ink">
         {order.customer}
       </Text>
 
-      <View className="mt-2 flex-row flex-wrap justify-between gap-2.5">
+      <View className="mb-1 flex-row flex-wrap gap-x-4 gap-y-1.5">
+        <View className="flex-row items-center gap-[5px]">
+          <Icon name="location-outline" size={15} color={colors.muted} />
+          <Text className="text-[11px] text-muted">{order.address}</Text>
+        </View>
+        {!!order.vendedor && (
+          <View className="flex-row items-center gap-[5px]">
+            <Icon name="person-outline" size={15} color={colors.muted} />
+            <Text className="text-[11px] text-muted">{order.vendedor}</Text>
+          </View>
+        )}
+      </View>
+      <View className="flex-row flex-wrap justify-between gap-2.5">
         <View className="flex-row items-center gap-[5px]">
           <Icon name="layers-outline" size={15} color={colors.muted} />
           <Text className="text-[11px] text-muted">
@@ -74,14 +88,14 @@ function OrderCard({ order }: { order: DispatchOrder }) {
         </View>
       </View>
       {status === "in_progress" && (
-        <View className="mt-4 gap-[7px]">
+        <View className="mt-2 gap-[7px]">
           <ProgressBar percent={progress.percent} />
           <Text className="text-[10px] text-muted">
             {progress.checked}/{progress.total} unidades verificadas
           </Text>
         </View>
       )}
-      <View className="mt-[18px] flex-row items-center justify-between gap-2 border-t border-line pt-[15px]">
+      <View className="mt-2 flex-row items-center justify-between gap-2 border-t border-line pt-[15px]">
         <View className="flex-row items-center gap-[5px]">
           <View
             className={`mr-0.5 h-[5px] w-[5px] rounded-[3px] ${
@@ -152,10 +166,10 @@ export default function Index() {
           }
           ListHeaderComponent={
             <View>
-              <View className="mb-[30px] mt-[25px] overflow-hidden rounded-3xl bg-dark p-[21px]">
-                <View className="flex-row items-center gap-3">
+              <View className="mb-[12px] mt-[25px] overflow-hidden rounded-3xl bg-dark p-5">
+                <View className="flex-row items-center gap-2">
                   <View className="flex-1">
-                    <Text className="mt-2.5 text-[37px] font-bold tracking-[-1px] text-surface">
+                    <Text className="mt-2 text-[37px] font-bold tracking-[-1px] text-surface">
                       {loading && !orders.length ? "—" : pending}
                       <Text className="text-[15px] font-medium tracking-[-0.3px]">
                         {" "}
@@ -165,15 +179,15 @@ export default function Index() {
                       </Text>
                     </Text>
                   </View>
-                  <View className="h-[57px] w-[57px] items-center justify-center rounded-[19px] bg-surface">
+                  <View className="h-[47px] w-[47px] items-center justify-center rounded-[12px] bg-surface">
                     <Icon
                       name="file-tray-stacked-outline"
                       color={colors.primary}
-                      size={30}
+                      size={25}
                     />
                   </View>
                 </View>
-                <View className="my-[18px] h-px bg-inverse-line" />
+                <View className="my-3 h-px bg-inverse-line" />
                 <View className="flex-row flex-wrap justify-between gap-3">
                   <View className="flex-row items-center gap-[5px]">
                     <Icon
@@ -198,7 +212,7 @@ export default function Index() {
                 </View>
               </View>
 
-              <View className="mb-4 flex-row items-center gap-[9px]">
+              <View className="mb-2 flex-row items-center gap-[9px]">
                 <Text className="text-[20px] font-bold tracking-[-0.5px] text-ink">
                   Órdenes de despacho
                 </Text>
@@ -208,7 +222,7 @@ export default function Index() {
                   </Text>
                 </View>
               </View>
-              <View className="flex-row items-center gap-2.5 rounded-[15px] border border-line bg-surface px-3.5">
+              <View className="flex-row items-center gap-2 rounded-[15px] border border-line bg-surface px-3.5">
                 <Icon name="search-outline" color={colors.muted} size={21} />
                 <TextInput
                   accessibilityLabel="Buscar orden o cliente"
@@ -231,7 +245,7 @@ export default function Index() {
                   </Pressable>
                 )}
               </View>
-              <View className="mb-5 mt-[15px] flex-row gap-1 rounded-[13px] bg-segment p-1">
+              <View className="mb-2 mt-2 flex-row gap-1 rounded-[13px] bg-segment p-1">
                 {(["open", "completed"] as const).map((value) => (
                   <Pressable
                     key={value}

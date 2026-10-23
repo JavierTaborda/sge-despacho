@@ -2,6 +2,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -21,6 +22,7 @@ import {
   isItemComplete,
   type DispatchOrder,
 } from "@/domain/dispatch";
+import { useBarcodeScanner } from "@/hooks/use-barcode-scanner";
 import {
   checkBarcode,
   checkSerial,
@@ -43,11 +45,41 @@ function DispatchScreen({ id }: { id: string }) {
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
   const [code, setCode] = useState("");
+  const [validationState, setValidationState] = useState<
+    "idle" | "success" | "error"
+  >("idle");
   const [retry, setRetry] = useState(0);
   const inputRef = useRef<TextInputInstance>(null);
   const refocusAfterScan = useRef(false);
   const requestInFlight = useRef(false);
   const mounted = useRef(true);
+  const validationFlash = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (validationState !== "success") return;
+    Animated.sequence([
+      Animated.timing(validationFlash, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: false,
+      }),
+      Animated.timing(validationFlash, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: false,
+      }),
+      Animated.timing(validationFlash, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: false,
+      }),
+      Animated.timing(validationFlash, {
+        toValue: 0,
+        duration: 420,
+        useNativeDriver: false,
+      }),
+    ]).start();
+  }, [validationFlash, validationState]);
 
   useEffect(() => {
     mounted.current = true;
@@ -97,6 +129,7 @@ function DispatchScreen({ id }: { id: string }) {
     requestInFlight.current = true;
     setBusy(true);
     setError("");
+    setValidationState("idle");
     setFeedback("");
     try {
       const response = serialMode
@@ -104,6 +137,7 @@ function DispatchScreen({ id }: { id: string }) {
         : await checkBarcode(order.id, item.id, value);
       if (!mounted.current) return;
       setOrder(response.order);
+      setValidationState("success");
       setCode("");
       if (serialMode) {
         const updatedItem = response.order.items.find(
@@ -141,6 +175,7 @@ function DispatchScreen({ id }: { id: string }) {
             ? `${getErrorMessage(reason)} Vuelve a escanear el código de barras antes del serial.`
             : getErrorMessage(reason),
         );
+        setValidationState("error");
         setCode("");
       }
     } finally {
@@ -150,6 +185,13 @@ function DispatchScreen({ id }: { id: string }) {
       }
     }
   }
+
+  const camera = useBarcodeScanner({
+    disabled: busy,
+    onScanned: (value) => {
+      void submitScan(value);
+    },
+  });
 
   async function confirmDispatch() {
     if (!order || requestInFlight.current) return;
@@ -232,45 +274,34 @@ function DispatchScreen({ id }: { id: string }) {
               keyboardShouldPersistTaps="handled"
               contentContainerClassName="gap-[18px] p-6 pb-[35px] pt-1.5"
             >
-              <View className="gap-2 rounded-[18px] border border-line bg-surface p-[17px]">
-                <View className="gap-1">
-                  <Text className="text-[10px] font-bold tracking-[1px] text-muted">
-                    NÚMERO DE PREDESPACHO
-                  </Text>
-                  <Text className="text-2xl font-bold tracking-[-1.3px] text-ink">
-                    {order.id}
-                  </Text>
-                </View>
-                <View className="h-px bg-line" />
-                <View className="gap-1">
-                  <Text className="text-[10px] font-bold tracking-[1px] text-muted">
-                    CLIENTE
-                  </Text>
-                  <Text className="text-[17px] font-semibold leading-6 text-ink">
-                    {order.customer}
-                  </Text>
-                </View>
-              </View>
-
-              <View className="gap-3 rounded-[18px] border border-line bg-surface p-[17px]">
-                <View className="flex-row items-center justify-between gap-2">
-                  <Text className="text-[12px] font-semibold text-ink">
-                    Progreso de preparación
-                  </Text>
-                  <Text className="text-[16px] font-extrabold text-primary">
-                    {progress.percent}%
-                  </Text>
+              <View className="gap-2.5 rounded-[20px] border border-line bg-surface px-4 py-3.5">
+                <View className="flex-row items-center gap-3">
+                  <View className="h-11 w-11 items-center justify-center rounded-[15px] bg-primary-light">
+                    <Icon name="scan" size={22} color={colors.primary} />
+                  </View>
+                  <View className="min-w-0 flex-1 gap-0.5">
+                    <View className="flex-row items-center gap-2">
+                      <Text className="text-[15px] font-extrabold text-ink">
+                        {order.id}
+                      </Text>
+                    </View>
+                    <Text
+                      numberOfLines={2}
+                      className="text-[12px] font-medium text-muted"
+                    >
+                      {order.customer}
+                    </Text>
+                  </View>
+                  <View className="items-end gap-0.5">
+                    <Text className="text-[17px] font-extrabold text-primary">
+                      {progress.percent}%
+                    </Text>
+                    <Text className="text-[9px] font-medium text-muted">
+                      {progress.checked}/{progress.total}
+                    </Text>
+                  </View>
                 </View>
                 <ProgressBar percent={progress.percent} />
-                <View className="flex-row items-center justify-between gap-2">
-                  <Text className="text-[10px] text-muted">
-                    {progress.checked} de {progress.total} unidades verificadas
-                  </Text>
-                  <Text className="text-[10px] text-muted">
-                    {order.items.filter(isItemComplete).length}/
-                    {order.items.length} artículos
-                  </Text>
-                </View>
               </View>
 
               {order.completedAt ? (
@@ -306,9 +337,27 @@ function DispatchScreen({ id }: { id: string }) {
                   />
                 </View>
               ) : item ? (
-                <View
+                <Animated.View
                   className="gap-3.5 rounded-3xl border border-scanner-border bg-surface p-5"
-                  style={shadows.scanner}
+                  style={[
+                    shadows.scanner,
+                    {
+                      backgroundColor:
+                        validationState === "error"
+                          ? colors.redLight
+                          : validationFlash.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [
+                                colors.surface,
+                                colors.secondaryLight,
+                              ],
+                            }),
+                      borderColor:
+                        validationState === "error"
+                          ? colors.red
+                          : colors.scannerBorder,
+                    },
+                  ]}
                 >
                   <View className="flex-row items-center justify-between">
                     <Badge tone="orange">
@@ -385,29 +434,74 @@ function DispatchScreen({ id }: { id: string }) {
                     </View>
                   </View>
 
-                  <View className="min-h-[176px] items-center justify-center gap-2 rounded-[13px] bg-scanner p-4">
-                    <View className="absolute left-2.5 top-2.5 h-[22px] w-[22px] rounded-tl-[7px] border-l-2 border-t-2 border-scanner-corner" />
-                    <View className="absolute right-2.5 top-2.5 h-[22px] w-[22px] rounded-tr-[7px] border-r-2 border-t-2 border-scanner-corner" />
-                    <View className="absolute bottom-2.5 left-2.5 h-[22px] w-[22px] rounded-bl-[7px] border-b-2 border-l-2 border-scanner-corner" />
-                    <View className="absolute bottom-2.5 right-2.5 h-[22px] w-[22px] rounded-br-[7px] border-b-2 border-r-2 border-scanner-corner" />
-                    <Icon
-                      name={serialMode ? "scan-outline" : "barcode-outline"}
-                      size={59}
-                      color={colors.primary}
-                    />
-                    <Text className="text-center text-[14px] font-bold text-ink">
-                      {serialMode
-                        ? "Escanea el serial"
-                        : "Escanea el código de barras"}
-                    </Text>
-                    <Text className="text-center text-[10px] leading-4 text-muted">
-                      {serialMode
-                        ? `Unidad ${item.serials.length + 1} de ${item.quantity} · Un serial por unidad`
-                        : item.requiresSerial
-                          ? `Unidad ${item.serials.length + 1} de ${item.quantity} · Primero código de barras, luego serial`
-                          : "Usa tu lector o ingresa el código abajo"}
-                    </Text>
-                  </View>
+                  {/* <View className="min-h-[176px] overflow-hidden rounded-[13px] bg-scanner">
+                    {camera.cameraEnabled && camera.cameraReady ? (
+                      <View className="h-[176px]">
+                        <CameraView
+                          style={{ flex: 1 }}
+                          facing="back"
+                          onBarcodeScanned={camera.handleBarcodeScanned}
+                          barcodeScannerSettings={{
+                            barcodeTypes: [
+                              "ean13",
+                              "ean8",
+                              "upc_a",
+                              "upc_e",
+                              "code128",
+                              "code39",
+                              "code93",
+                              "itf14",
+                              "datamatrix",
+                              "qr",
+                            ],
+                          }}
+                        />
+                        <View className="absolute inset-0 items-center justify-center">
+                          <View className="h-[92px] w-[82%] rounded-[10px] border-2 border-secondary" />
+                        </View>
+                      </View>
+                    ) : (
+                      <View className="min-h-[176px] items-center justify-center gap-2 p-4">
+                        <View className="absolute left-2.5 top-2.5 h-[22px] w-[22px] rounded-tl-[7px] border-l-2 border-t-2 border-scanner-corner" />
+                        <View className="absolute right-2.5 top-2.5 h-[22px] w-[22px] rounded-tr-[7px] border-r-2 border-t-2 border-scanner-corner" />
+                        <View className="absolute bottom-2.5 left-2.5 h-[22px] w-[22px] rounded-bl-[7px] border-b-2 border-l-2 border-scanner-corner" />
+                        <View className="absolute bottom-2.5 right-2.5 h-[22px] w-[22px] rounded-br-[7px] border-b-2 border-r-2 border-scanner-corner" />
+                        <Icon
+                          name={serialMode ? "scan-outline" : "barcode-outline"}
+                          size={59}
+                          color={colors.primary}
+                        />
+                        <Text className="text-center text-[14px] font-bold text-ink">
+                          {serialMode
+                            ? "Escanea el serial"
+                            : "Escanea el código de barras"}
+                        </Text>
+                        <Text className="text-center text-[10px] leading-4 text-muted">
+                          {serialMode
+                            ? `Unidad ${item.serials.length + 1} de ${item.quantity} · Un serial por unidad`
+                            : item.requiresSerial
+                              ? `Unidad ${item.serials.length + 1} de ${item.quantity} · Primero código de barras, luego serial`
+                              : "Usa tu lector o ingresa el código abajo"}
+                        </Text>
+                      </View>
+                    )}
+                  </View> 
+
+                  <Button
+                    title={
+                      camera.cameraEnabled
+                        ? "Ocultar cámara y usar lector"
+                        : "Mostrar cámara"
+                    }
+                    icon={
+                      camera.cameraEnabled
+                        ? "eye-off-outline"
+                        : "camera-outline"
+                    }
+                    secondary
+                    disabled={busy}
+                    onPress={camera.toggleCamera}
+                  />*/}
 
                   {item.requiresSerial && (
                     <View className="flex-row items-center gap-3">
@@ -435,7 +529,20 @@ function DispatchScreen({ id }: { id: string }) {
                         : "Código de barras del artículo"
                     }
                     value={code}
-                    onChangeText={setCode}
+                    onChangeText={(value) => {
+                      setCode(value);
+                      if (error) setError("");
+                      if (validationState !== "idle") {
+                        setValidationState("idle");
+                      }
+                      if (
+                        !serialMode &&
+                        value.trim() === item.barcode &&
+                        !requestInFlight.current
+                      ) {
+                        void submitScan(value);
+                      }
+                    }}
                     editable={!busy}
                     placeholder={
                       serialMode
@@ -455,16 +562,24 @@ function DispatchScreen({ id }: { id: string }) {
                       void submitScan(event.nativeEvent.text);
                     }}
                   />
-                  <View className="-mt-1.5 flex-row items-center gap-[5px]">
+                  {camera.permissionDenied && (
+                    <Text className="-mt-1 text-[10px] leading-4 text-muted">
+                      Activa el permiso de cámara en los ajustes para escanear
+                      desde este teléfono.
+                    </Text>
+                  )}
+                  {/* <View className="-mt-1.5 flex-row items-center gap-[5px]">
                     <Icon
                       name="keypad-outline"
                       color={colors.muted}
                       size={13}
                     />
                     <Text className="text-[10px] text-muted">
-                      Lector tipo teclado · Enter para validar
+                      {isZebraTc26
+                        ? "Zebra DataWedge · Enter para validar"
+                        : "Lector tipo teclado · Enter para validar"}
                     </Text>
-                  </View>
+                  </View> */}
                   <Button
                     title={
                       busy
@@ -520,7 +635,7 @@ function DispatchScreen({ id }: { id: string }) {
                       />
                     </Pressable>
                   </View>
-                </View>
+                </Animated.View>
               ) : (
                 <View className="gap-4 rounded-[22px] border border-success-border bg-surface p-[22px]">
                   <View className="flex-row items-center gap-[9px]">

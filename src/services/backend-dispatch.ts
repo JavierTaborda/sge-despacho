@@ -29,7 +29,15 @@ export type CbpredesPayload = {
   cerrado?: number | boolean | null;
   anulado?: number | boolean | null;
   cliente?: string | null;
+  Cliente?: string | null;
   direccion?: string | null;
+  Zona?: string | null;
+  Vendedor?: string | null;
+  co_cli?: string | null;
+  co_zon?: string | null;
+  co_ven?: string | null;
+  fecfinalStr?: string | null;
+  supervisor?: string | null;
 };
 
 export type DtpredesPayload = {
@@ -46,6 +54,8 @@ export type DtpredesPayload = {
   refbarra?: string | null;
   recouser?: number | null;
   horacapture?: string | null;
+  artdes?: string | null;
+  Articulo?: string | null;
 };
 
 type BackendDispatchPayload = {
@@ -88,7 +98,7 @@ function lineRows(payload: BackendDispatchPayload) {
 function mapHeader(header: CbpredesPayload, lines: DtpredesPayload[]): DispatchOrder {
   const orderId = String(header.prednum);
   const orderLines = lines.filter((line) => String(line.prednum) === orderId);
-  const completed = header.fecfinal ?? (isEnabled(header.cerrado) ? header.fecdesp : null);
+  const completed = header.fecfinal ?? header.fecfinalStr ?? (isEnabled(header.cerrado) ? header.fecdesp : null);
   const firstLineByArticle = new Map<string, DtpredesPayload[]>();
   for (const line of orderLines) {
     const key = `${line.itemnum}:${line.codart ?? ""}:${line.codbarra ?? line.refbarra ?? ""}`;
@@ -102,12 +112,12 @@ function mapHeader(header: CbpredesPayload, lines: DtpredesPayload[]): DispatchO
     estatus: number(header.estatus, 0),
     fecemis: text(header.fecemis, ""),
     fecdesp: text(header.fecdesp, ""),
-    fecfinal: header.fecfinal ?? null,
+    fecfinal: header.fecfinal ?? header.fecfinalStr ?? null,
     horainicio: header.horainicio ?? null,
     horafinal: header.horafinal ?? null,
-    codcli: text(header.codcli, ""),
-    codzon: text(header.codzon, ""),
-    codven: text(header.codven, ""),
+    codcli: text(header.co_cli, text(header.codcli, "")),
+    codzon: text(header.co_zon, text(header.codzon, "")),
+    codven: text(header.co_ven, text(header.codven, "")),
     cantped: number(header.cantped, 1),
     cantreng: number(header.cantreng, orderLines.length),
     cantdesp: number(header.cantdesp, 0),
@@ -124,15 +134,16 @@ function mapHeader(header: CbpredesPayload, lines: DtpredesPayload[]): DispatchO
     comentario: header.comentario ?? null,
     owneruser: number(header.owneruser, 1),
     id: orderId,
-    customer: text(header.cliente, text(header.codcli, "Cliente sin nombre")),
-    address: text(header.direccion, text(header.codzon, "Zona no informada")),
+    customer: text(header.Cliente, text(header.cliente, text(header.co_cli, text(header.codcli, "Cliente sin nombre")))),
+    address: text(header.Zona, text(header.direccion, text(header.co_zon, text(header.codzon, "Zona no informada")))),
     scheduledAt: text(header.fecdesp, "Sin fecha de despacho"),
-  
+    vendedor: text(header.Vendedor, text(header.co_ven, text(header.codven, "Vendedor no informado"))),
+    supervisor: text(header.supervisor, ""),
     completedAt: completed ?? null,
     items: [...firstLineByArticle.values()].map((lineGroup, index) => {
       const line = lineGroup[0];
-      const barcode = text(line.codbarra, text(line.refbarra, ""));
-      const expectedSerials = lineGroup
+      const barcode = text(line.refbarra, text(line.codbarra, ""));
+      const serials = lineGroup
         .map((entry) => text(entry.serial1, ""))
         .filter(Boolean);
       return {
@@ -150,14 +161,14 @@ function mapHeader(header: CbpredesPayload, lines: DtpredesPayload[]): DispatchO
         recouser: number(line.recouser, 1),
         horacapture: line.horacapture ?? null,
         id: `${orderId}-${text(line.itemnum, String(index + 1))}`,
-        name: text(line.codart, "Artículo sin descripción"),
+        name: text(line.Articulo, text(line.artdes, text(line.codart, "Artículo sin descripción"))),
         sku: text(line.codart, "SIN SKU"),
         barcode,
         quantity: Math.max(1, lineGroup.length),
         location: text(line.codalma, "Sin ubicación"),
-        requiresSerial: isEnabled(line.manjser) || expectedSerials.length > 0,
+        requiresSerial: isEnabled(line.manjser) || serials.length > 0,
         barcodeChecked: false,
-        serials: [],
+        serials,
       };
     }),
   };

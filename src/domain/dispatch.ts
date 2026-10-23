@@ -10,7 +10,7 @@ export type Dtpredes = {
   codbarra: string | null;
   serial1: string | null;
   refbarra: string | null;
-  recouser: number;
+  recouser: string | number;
   horacapture: string | null;
 };
 
@@ -23,6 +23,7 @@ export type DispatchItem = Dtpredes & {
   barcode: string;
   quantity: number;
   location: string;
+
   requiresSerial: boolean;
   // For serialized items, this authorizes only the next serial attempt.
   barcodeChecked: boolean;
@@ -66,15 +67,23 @@ export type DispatchOrder = Cbpredes & {
   scheduledAt: string;
   items: DispatchItem[];
   completedAt: string | null;
+  vendedor: string;
+  supervisor: string;
 };
 
 export type DemoItem = Omit<DispatchItem, keyof Dtpredes | "barcodeChecked" | "serials"> & {
+  prednum: number;
+  itemnum: number;
+  pednum: number;
+  rennum: number;
+  recouser: string | number;
   expectedSerials: string[];
 };
 
-export type DemoOrder = Omit<DispatchOrder, keyof Cbpredes | "items" | "completedAt"> & {
-  items: DemoItem[];
-};
+export type DemoOrder = Omit<DispatchOrder, keyof Cbpredes | "items" | "completedAt"> &
+  Pick<Cbpredes, "pednum" | "codcli" | "codzon" | "codven"> & {
+    items: DemoItem[];
+  };
 
 export class DispatchError extends Error {
   readonly status: number;
@@ -130,7 +139,6 @@ function copyOrder(order: DispatchOrder): DispatchOrder {
 export function createDispatchStore(seeds: DemoOrder[]) {
   const orders: DispatchOrder[] = seeds.map((seed) => ({
     prednum: Number(seed.id.replace(/\D/g, "")) || 0,
-    pednum: Number(seed.id.replace(/\D/g, "")) || 0,
     profite: false,
     estatus: 0,
     fecemis: "",
@@ -138,9 +146,6 @@ export function createDispatchStore(seeds: DemoOrder[]) {
     fecfinal: null,
     horainicio: null,
     horafinal: null,
-    codcli: seed.customer,
-    codzon: seed.address,
-    codven: "",
     cantped: seed.items.length,
     cantreng: seed.items.length,
     cantdesp: 0,
@@ -158,21 +163,16 @@ export function createDispatchStore(seeds: DemoOrder[]) {
     owneruser: 1,
     ...seed,
     completedAt: null,
-    items: seed.items.map(({ expectedSerials: _, ...item }, index) => ({
-      prednum: Number(seed.id.replace(/\D/g, "")) || 0,
-      itemnum: index + 1,
-      pednum: Number(seed.id.replace(/\D/g, "")) || 0,
-      rennum: index + 1,
+    items: seed.items.map(({ expectedSerials: _, ...item }) => ({
+      ...item,
       codart: item.sku,
       compuesto: false,
       manjser: item.requiresSerial,
       codalma: item.location,
-      codbarra: item.barcode,
+      codbarra: null,
       serial1: null,
-      refbarra: null,
-      recouser: 1,
+      refbarra: item.barcode,
       horacapture: null,
-      ...item,
       barcodeChecked: false,
       serials: [],
     })),
@@ -214,6 +214,7 @@ export function createDispatchStore(seeds: DemoOrder[]) {
     checkBarcode(orderId: string, itemId: string, barcode: string) {
       const { order, item } = requireCurrentItem(orderId, itemId);
       item.barcodeChecked = false;
+      item.codbarra = null;
       if (barcode.trim() !== item.barcode) {
         throw new DispatchError(
           `Código incorrecto. Debes escanear el artículo: ${item.name}.`,
@@ -222,6 +223,8 @@ export function createDispatchStore(seeds: DemoOrder[]) {
         );
       }
       item.barcodeChecked = true;
+      item.codbarra = barcode.trim();
+      if (!item.requiresSerial) item.horacapture = new Date().toISOString();
       return { valid: true, serial: item.requiresSerial, order: copyOrder(order) };
     },
     checkSerial(orderId: string, itemId: string, input: string) {
@@ -247,10 +250,9 @@ export function createDispatchStore(seeds: DemoOrder[]) {
           order,
         );
       }
-      if (!expectedSerials(orderId, itemId).includes(serial)) {
-        throw new DispatchError("Este serial no pertenece al artículo actual.", 422, order);
-      }
       item.serials.push(serial);
+      item.serial1 = serial;
+      item.horacapture = new Date().toISOString();
       return { valid: true, order: copyOrder(order) };
     },
     completeOrder(orderId: string) {
@@ -268,7 +270,7 @@ export function createDispatchStore(seeds: DemoOrder[]) {
       return (
         expectedSerials(order.id, item.id).find(
           (serial) => !item.serials.includes(serial),
-        ) ?? null
+        ) ?? `DEMO-${item.id}`
       );
     },
   };

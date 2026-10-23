@@ -12,21 +12,68 @@ import {
   getOrderProgress,
   getOrderStatus,
   isItemComplete,
+  type DemoOrder,
 } from "../src/domain/dispatch.ts";
 import { mapBackendDispatchPayload } from "../src/services/backend-dispatch.ts";
-import { createMockAdapter, getErrorOrder } from "../src/services/dispatch-api.ts";
+import { createMockAdapter } from "../src/services/dispatch-api.ts";
+
+const serializedSeed = demoOrders[0].items[0];
+const testOrder: DemoOrder = {
+  ...demoOrders[0],
+  id: "OD-1048",
+  items: [
+    {
+      ...serializedSeed,
+      id: "item-1",
+      name: "Aire de ventana",
+      sku: "AVFR-8W",
+      barcode: "7801234567012",
+      quantity: 2,
+      requiresSerial: true,
+      expectedSerials: ["MSV2200-24081", "MSV2200-24082"],
+    },
+    {
+      ...serializedSeed,
+      id: "item-2",
+      name: "Sensor de temperatura",
+      sku: "ST-100",
+      barcode: "7801234567029",
+      quantity: 2,
+      requiresSerial: false,
+      expectedSerials: [],
+    },
+    {
+      ...serializedSeed,
+      id: "item-3",
+      name: "Oxímetro de pulso",
+      sku: "OP-50",
+      barcode: "7801234567050",
+      quantity: 1,
+      requiresSerial: true,
+      expectedSerials: ["OP50-88301"],
+    },
+  ],
+};
 
 function setup() {
-  return createDispatchStore(demoOrders);
+  return createDispatchStore([testOrder]);
 }
 
-test("returns test orders without exposing expected serials or mutable internal state", () => {
+test("loads the two provided dispatches and protects mutable store state", () => {
+  assert.deepEqual(demoOrders.map((order) => order.id), ["6242", "6243"]);
+  assert.equal(demoOrders[0].pednum, 19665);
+  assert.equal(demoOrders[0].items.length, 9);
+  assert.equal(demoOrders[1].pednum, 19641);
+  assert.equal(demoOrders[1].items.length, 14);
+
   const store = setup();
   const orders = store.getOrders();
-  assert.equal(orders.length, 4);
+  assert.equal(orders.length, 1);
   assert.equal(getOrderStatus(orders[0]), "pending");
-  assert.deepEqual(getOrderProgress(orders[0]), { checked: 0, total: 1, percent: 0 });
+  assert.deepEqual(getOrderProgress(orders[0]), { checked: 0, total: 5, percent: 0 });
   assert.equal("expectedSerials" in orders[0].items[0], false);
+  assert.equal(orders[0].items[0].refbarra, "7801234567012");
+  assert.equal(orders[0].items[0].codbarra, null);
   orders[0].items[0].barcodeChecked = true;
   orders[0].items[0].serials.push("INVALID");
   assert.equal(store.getOrder("OD-1048").items[0].barcodeChecked, false);
@@ -39,16 +86,16 @@ test("maps cbpredes and mvpredes rows to dispatch orders", () => {
       prednum: 603011,
       pednum: 946216,
       codcli: "COFR-20",
-      codzon: "N01000",
+        codzon: "N01000",
       fecdesp: "2026-10-21",
     }],
     dtpredes: [{
       prednum: 603011,
       itemnum: 1,
-      codart: "7590020007170",
-      codbarra: "7590020007170",
-      codalma: "01",
-      manjser: 1,
+        codart: "7590020007170",
+        codbarra: "7590020007170",
+        codalma: "01",
+        manjser: 1,
       serial1: "SN-001",
       cantped: 1,
     }],
@@ -61,6 +108,41 @@ test("maps cbpredes and mvpredes rows to dispatch orders", () => {
   assert.equal(orders[0].items[0].barcode, "7590020007170");
   assert.equal(orders[0].items[0].requiresSerial, true);
   assert.equal(orders[0].items[0].location, "01");
+});
+
+test("maps real header aliases and treats refbarra as expected barcode", () => {
+  const [order] = mapBackendDispatchPayload({
+    cbpredes: [{
+      prednum: 6242,
+      pednum: 19665,
+      co_cli: "00734",
+      Cliente: "AVIR AL BOUNNAY DE AL PONY",
+      co_zon: "0002",
+      Zona: "TACHIRA",
+      co_ven: "00004",
+      Vendedor: "DESSIRE MARTINEZ",
+      fecdesp: "2026-10-23 09:32:56",
+    }],
+    dtpredes: [{
+      prednum: 6242,
+      itemnum: 1,
+      pednum: 19665,
+      rennum: 1,
+      codart: "AVFR-12W",
+      artdes: "AIRE DE VENTANA FRIGILUX",
+      Articulo: "AVFR-12W - AIRE DE VENTANA FRIGILUX",
+      refbarra: "7590020007163",
+      codbarra: null,
+      manjser: true,
+    }],
+  });
+
+  assert.equal(order.customer, "AVIR AL BOUNNAY DE AL PONY");
+  assert.equal(order.address, "TACHIRA");
+  assert.equal(order.vendedor, "DESSIRE MARTINEZ");
+  assert.equal(order.items[0].barcode, "7590020007163");
+  assert.equal(order.items[0].codbarra, null);
+  assert.equal(order.items[0].name, "AVFR-12W - AIRE DE VENTANA FRIGILUX");
 });
 
 test("rejects incorrect and empty barcodes rather than returning serial: false", () => {
@@ -78,7 +160,7 @@ test("rejects skipping lines and scanning serials before the barcode", () => {
   assert.throws(() => store.completeOrder("OD-1048"), /todos/);
 });
 
-test("serial: true requires a fresh barcode for each unit and blocks the next line", () => {
+test("serial: true requires a fresh barcode for each unit and accepts any serial", () => {
   const store = setup();
   const response = store.checkBarcode("OD-1048", "item-1", " 7801234567012\r\n");
   assert.equal(response.valid, true);
@@ -92,21 +174,21 @@ test("serial: true requires a fresh barcode for each unit and blocks the next li
   assert.deepEqual(getOrderProgress(afterOne), { checked: 1, total: 5, percent: 20 });
   assert.equal(getCurrentItem(afterOne)?.id, "item-1");
   assert.equal(afterOne.items[0].barcodeChecked, false);
+  assert.equal(afterOne.items[0].codbarra, "7801234567012");
+  assert.equal(afterOne.items[0].serial1, "MSV2200-24082");
+  assert.ok(afterOne.items[0].horacapture);
   assert.equal(getOrderStatus(afterOne), "in_progress");
   assert.throws(() => store.checkBarcode("OD-1048", "item-2", "7801234567029"), /saltar/);
   assert.throws(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24081"), /Primero/);
   store.checkBarcode("OD-1048", "item-1", "7801234567012");
   assert.throws(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24082"), /ya fue registrado/);
   store.checkBarcode("OD-1048", "item-1", "7801234567012");
-  assert.throws(() => store.checkSerial("OD-1048", "item-1", "BI500-77120"), /no pertenece/);
-  store.checkBarcode("OD-1048", "item-1", "7801234567012");
   assert.throws(() => store.checkSerial("OD-1048", "item-1", ""), /escribe un serial/);
   store.checkBarcode("OD-1048", "item-1", "7801234567012");
-  const afterTwo = store.checkSerial("OD-1048", "item-1", "MSV2200-24081").order;
+  const afterTwo = store.checkSerial("OD-1048", "item-1", "BI500-77120").order;
   assert.equal(afterTwo.items[0].serials.length, 2);
   assert.equal(afterTwo.items[0].barcodeChecked, false);
   assert.equal(isItemComplete(afterTwo.items[0]), true);
-  assert.equal(getCurrentItem(afterTwo)?.id, "item-2");
   assert.throws(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24083"), /saltar/);
 });
 
@@ -125,8 +207,8 @@ test("serial: false completes all quantities of the line and advances automatica
   assert.throws(() => store.completeOrder("OD-1048"), /todos/);
 });
 
-test("empty, foreign and duplicate serials consume the barcode authorization", () => {
-  for (const invalidSerial of ["", "   ", "BI500-77120", "MSV2200-24081"]) {
+test("empty and duplicate serials consume the barcode authorization", () => {
+  for (const invalidSerial of ["", "   ", "MSV2200-24081"]) {
     const store = setup();
     store.checkBarcode("OD-1048", "item-1", "7801234567012");
     store.checkSerial("OD-1048", "item-1", "MSV2200-24081");
@@ -197,7 +279,7 @@ test("demo suggestions alternate barcode and serial for units of the same produc
 
 test("full sequential flow, confirmation, idempotence, and completed order protection", () => {
   const store = setup();
-  for (const seed of demoOrders) {
+  for (const seed of [testOrder]) {
     while (getCurrentItem(store.getOrder(seed.id))) {
       const order = store.getOrder(seed.id);
       const item = getCurrentItem(order)!;
@@ -215,7 +297,7 @@ test("full sequential flow, confirmation, idempotence, and completed order prote
     assert.throws(() => store.checkBarcode(seed.id, seed.items[0].id, seed.items[0].barcode), /ya fue despachada/);
     assert.throws(() => store.checkSerial(seed.id, seed.items[0].id, "ANY"), /ya fue despachada/);
   }
-  assert.equal(store.getOrders().filter((order) => order.completedAt).length, 4);
+  assert.equal(store.getOrders().filter((order) => order.completedAt).length, 1);
 });
 
 test("unknown orders return an explicit 404", () => {
@@ -231,27 +313,19 @@ test("Axios mock handles real JSON-transformed requests and error responses", as
   const api = create({ adapter: createMockAdapter(store, 0) });
   const list = await api.get("/ordenes-despacho");
   assert.equal(list.status, 200);
-  assert.equal(list.data.orders.length, 4);
+  assert.equal(list.data.orders.length, 1);
   const detail = await api.get("/ordenes-despacho/OD-1048");
   assert.equal(detail.data.order.id, "OD-1048");
   const scan = await api.post("/check-codigo-barra", {
     orderId: "OD-1048", itemId: "item-1", code: "7801234567012",
   });
   assert.equal(scan.data.serial, true);
+  const arbitrarySerial = await api.post("/check-serial", {
+    orderId: "OD-1048", itemId: "item-1", code: "WRONG",
+  });
+  assert.equal(arbitrarySerial.data.valid, true);
   await assert.rejects(
     api.post("/check-serial", { orderId: "OD-1048", itemId: "item-1", code: "WRONG" }),
-    (error) => {
-      assert.ok(isAxiosError(error));
-      assert.equal(error.response?.status, 422);
-      const order = getErrorOrder(error);
-      assert.equal(order?.id, "OD-1048");
-      assert.equal(order?.items[0].barcodeChecked, false);
-      assert.deepEqual(order?.items[0].serials, []);
-      return true;
-    },
-  );
-  await assert.rejects(
-    api.post("/check-serial", { orderId: "OD-1048", itemId: "item-1", code: "MSV2200-24081" }),
     (error) => isAxiosError(error) && error.response?.status === 409,
   );
   await assert.rejects(
