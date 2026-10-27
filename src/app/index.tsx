@@ -10,27 +10,25 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { Button, Icon, Notice, ProgressBar } from "@/components/ui";
+import { Badge, Button, Icon, Notice } from "@/components/ui";
 import { colors, shadows } from "@/constants/theme";
-import {
-    getOrderProgress,
-    getOrderStatus,
-    type DispatchOrder,
-} from "@/domain/dispatch";
 import { useDispatchOrders } from "@/hooks/use-dispatch-orders";
+import { getBackendOrderId, type BackendDispatchOrder } from "@/services/backend-dispatch";
+import { canWriteDispatch } from "@/services/dispatch-api";
 
-function OrderCard({ order }: { order: DispatchOrder }) {
-  const progress = getOrderProgress(order);
-  const status = getOrderStatus(order);
-  const completed = status === "completed";
+function OrderCard({ order }: { order: BackendDispatchOrder }) {
+  const completed = order.conformado === "Finalizado";
+  const customer = order.Cliente?.trim() || order.co_cli;
+  const zone = order.Zona?.trim() || order.co_zon;
+  const seller = order.Vendedor?.trim() || order.co_ven;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${order.id}, ${order.customer}, ${progress.total} ${progress.total === 1 ? "unidad" : "unidades"}. ${
-        completed ? "Ver comprobante" : "Preparar orden"
+      accessibilityLabel={`Predespacho ${order.prednum}, pedido ${order.pednum}, ${customer}, ${order.conformado}, cantidad ${order.cantdesp}. ${
+        completed ? "Ver detalle" : canWriteDispatch ? "Preparar orden" : "Consultar orden"
       }`}
       onPress={() =>
-        router.push({ pathname: "/despacho/[id]", params: { id: order.id } })
+        router.push({ pathname: "/despacho/[id]", params: { id: getBackendOrderId(order) } })
       }
       className="mb-3.5 rounded-[22px] border border-line bg-surface p-[19px] active:opacity-80"
       style={shadows.card}
@@ -49,26 +47,28 @@ function OrderCard({ order }: { order: DispatchOrder }) {
         </View>
         <View className="flex-1">
           <Text className="text-[15px] font-extrabold tracking-[0.1px] text-ink">
-            {order.id}
+            {order.prednum}
           </Text>
           <Text className="mt-1 text-[10px] text-muted">
             Predespacho · Pedido {order.pednum}
           </Text>
         </View>
+        <Badge tone={completed ? "green" : "orange"}>{order.conformado}</Badge>
       </View>
       <Text className="mb-2 mt-1 text-[18px] font-bold tracking-[-0.4px] text-ink">
-        {order.customer}
+        {customer}
       </Text>
+      <Text className="mb-2 text-[10px] text-muted">Cliente {order.co_cli}</Text>
 
       <View className="mb-1 flex-row flex-wrap gap-x-4 gap-y-1.5">
         <View className="flex-row items-center gap-[5px]">
           <Icon name="location-outline" size={15} color={colors.muted} />
-          <Text className="text-[11px] text-muted">{order.address}</Text>
+          <Text className="text-[11px] text-muted">{zone}</Text>
         </View>
-        {!!order.vendedor && (
+        {!!seller && (
           <View className="flex-row items-center gap-[5px]">
             <Icon name="person-outline" size={15} color={colors.muted} />
-            <Text className="text-[11px] text-muted">{order.vendedor}</Text>
+            <Text className="text-[11px] text-muted">{seller}</Text>
           </View>
         )}
       </View>
@@ -76,24 +76,20 @@ function OrderCard({ order }: { order: DispatchOrder }) {
         <View className="flex-row items-center gap-[5px]">
           <Icon name="layers-outline" size={15} color={colors.muted} />
           <Text className="text-[11px] text-muted">
-            {order.items.length}{" "}
-            {order.items.length === 1 ? "artículo" : "artículos"}
-            {" · "}
-            {progress.total} uds.
+            Cantidad de despacho: {order.cantdesp}
           </Text>
         </View>
         <View className="flex-row items-center gap-[5px]">
           <Icon name="time-outline" size={15} color={colors.muted} />
-          <Text className="text-[11px] text-muted">{order.scheduledAt}</Text>
+          <Text className="text-[11px] text-muted">{order.fecdesp}</Text>
         </View>
       </View>
-      {status === "in_progress" && (
-        <View className="mt-2 gap-[7px]">
-          <ProgressBar percent={progress.percent} />
-          <Text className="text-[10px] text-muted">
-            {progress.checked}/{progress.total} unidades verificadas
-          </Text>
-        </View>
+      {!!order.duracion && <Text className="mt-2 text-[11px] text-muted">Duración: {order.duracion}</Text>}
+      {!!order.supervisor && <Text className="mt-2 text-[11px] text-muted">Supervisor: {order.supervisor}</Text>}
+      {completed && !!(order.fecfinalStr || order.fecfinal) && (
+        <Text className="mt-2 text-[11px] text-muted">
+          Finalizado: {order.fecfinalStr || order.fecfinal}
+        </Text>
       )}
       <View className="mt-2 flex-row items-center justify-between gap-2 border-t border-line pt-[15px]">
         <View className="flex-row items-center gap-[5px]">
@@ -103,20 +99,14 @@ function OrderCard({ order }: { order: DispatchOrder }) {
             }`}
           />
           <Text className="text-[11px] font-medium text-muted">
-            {completed
-              ? "Despacho confirmado"
-              : status === "in_progress"
-                ? "En preparación"
-                : "Por preparar"}
+            Responsable: {order.owneruser}
           </Text>
         </View>
         <View className="flex-row items-center gap-[5px]">
           <Text className="text-[12px] font-bold text-primary">
-            {completed
+            {completed || !canWriteDispatch
               ? "Ver detalle"
-              : status === "in_progress"
-                ? "Continuar"
-                : "Comenzar"}
+              : "Preparar"}
           </Text>
           <Icon name="arrow-forward" size={18} color={colors.primary} />
         </View>
@@ -137,7 +127,7 @@ export default function Index() {
     setFilter,
     completed,
     pending,
-    units,
+    dispatchQuantity,
     loadOrders,
   } = useDispatchOrders();
 
@@ -149,7 +139,7 @@ export default function Index() {
       <View className="w-full max-w-content flex-1 self-center">
         <FlatList
           data={visibleOrders}
-          keyExtractor={(order) => order.id}
+          keyExtractor={getBackendOrderId}
           renderItem={({ item }) => <OrderCard order={item} />}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
@@ -174,8 +164,8 @@ export default function Index() {
                       <Text className="text-[15px] font-medium tracking-[-0.3px]">
                         {" "}
                         {pending === 1
-                          ? "orden por preparar"
-                          : "órdenes por preparar"}
+                          ? "orden en despacho"
+                          : "órdenes en despacho"}
                       </Text>
                     </Text>
                   </View>
@@ -196,7 +186,7 @@ export default function Index() {
                       size={16}
                     />
                     <Text className="text-[11px] text-inverse-text">
-                      {units} unidades pendientes
+                      Cantidad en despacho: {dispatchQuantity}
                     </Text>
                   </View>
                   <View className="flex-row items-center gap-[5px]">
@@ -206,7 +196,7 @@ export default function Index() {
                       size={16}
                     />
                     <Text className="text-[11px] text-inverse-text">
-                      {completed} listas
+                      {completed} {completed === 1 ? "finalizada" : "finalizadas"}
                     </Text>
                   </View>
                 </View>
@@ -262,7 +252,7 @@ export default function Index() {
                         filter === value ? "text-ink" : "text-muted"
                       }`}
                     >
-                      {value === "open" ? "Por preparar" : "Finalizadas"}
+                      {value === "open" ? "En despacho" : "Finalizadas"}
                       {"  "}
                       {value === "open" ? pending : completed}
                     </Text>
@@ -310,7 +300,7 @@ export default function Index() {
                   {search
                     ? "Prueba con otro número de orden o cliente."
                     : filter === "completed"
-                      ? "Aquí encontrarás las órdenes que confirmes."
+                      ? "Aquí encontrarás las órdenes finalizadas."
                       : "No tienes órdenes pendientes en este momento."}
                 </Text>
               </View>

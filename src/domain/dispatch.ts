@@ -4,17 +4,28 @@ export type Dtpredes = {
   pednum: number;
   rennum: number;
   codart: string;
-  compuesto: boolean;
+  artdes: string | null;
+  Articulo: string;
+  compuesto: number;
   manjser: boolean;
   codalma: string;
   codbarra: string | null;
   serial1: string | null;
   refbarra: string | null;
-  recouser: string | number;
+  recouser: string;
+  supervisor: string | null;
   horacapture: string | null;
+  changed: false;
+  selected: false;
+  objectstate: "None";
+  objecticon: "sap-icon://None";
+  lectura: "Sin serial" | null;
+  objectstate2: "Warning";
 };
 
 export type Mvpredes = Dtpredes;
+
+export type DispatchStatus = "En despacho" | "Finalizado";
 
 export type DispatchItem = Dtpredes & {
   id: string;
@@ -57,7 +68,7 @@ export type Cbpredes = {
   anulado: boolean;
   proceso: boolean;
   comentario: string | null;
-  owneruser: number;
+  owneruser: string | number;
 };
 
 export type DispatchOrder = Cbpredes & {
@@ -69,6 +80,10 @@ export type DispatchOrder = Cbpredes & {
   completedAt: string | null;
   vendedor: string;
   supervisor: string;
+  conformado: DispatchStatus;
+  fecfinalStr: string | null;
+  duracion: string | null;
+  itemsLoaded: boolean;
 };
 
 export type DemoItem = Omit<DispatchItem, keyof Dtpredes | "barcodeChecked" | "serials"> & {
@@ -80,7 +95,7 @@ export type DemoItem = Omit<DispatchItem, keyof Dtpredes | "barcodeChecked" | "s
   expectedSerials: string[];
 };
 
-export type DemoOrder = Omit<DispatchOrder, keyof Cbpredes | "items" | "completedAt"> &
+export type DemoOrder = Omit<DispatchOrder, keyof Cbpredes | "items" | "completedAt" | "conformado" | "fecfinalStr" | "duracion" | "itemsLoaded"> &
   Pick<Cbpredes, "pednum" | "codcli" | "codzon" | "codven"> & {
     items: DemoItem[];
   };
@@ -104,7 +119,12 @@ export function isItemComplete(item: DispatchItem) {
 }
 
 export function getCurrentItem(order: DispatchOrder) {
+  if (isOrderComplete(order)) return undefined;
   return order.items.find((item) => !isItemComplete(item));
+}
+
+export function isOrderComplete(order: DispatchOrder) {
+  return order.conformado === "Finalizado";
 }
 
 export function getOrderProgress(order: DispatchOrder) {
@@ -123,7 +143,7 @@ export function getOrderProgress(order: DispatchOrder) {
 }
 
 export function getOrderStatus(order: DispatchOrder) {
-  if (order.completedAt) return "completed";
+  if (isOrderComplete(order)) return "completed";
   return order.items.some((item) => item.barcodeChecked || item.serials.length > 0)
     ? "in_progress"
     : "pending";
@@ -162,17 +182,31 @@ export function createDispatchStore(seeds: DemoOrder[]) {
     comentario: null,
     owneruser: 1,
     ...seed,
+    conformado: "En despacho",
+    fecfinalStr: null,
+    duracion: null,
+    itemsLoaded: true,
     completedAt: null,
     items: seed.items.map(({ expectedSerials: _, ...item }) => ({
       ...item,
       codart: item.sku,
-      compuesto: false,
+      artdes: item.name,
+      Articulo: item.name,
+      compuesto: 0,
       manjser: item.requiresSerial,
       codalma: item.location,
       codbarra: null,
       serial1: null,
       refbarra: item.barcode,
+      recouser: String(item.recouser),
+      supervisor: seed.supervisor || null,
       horacapture: null,
+      changed: false,
+      selected: false,
+      objectstate: "None",
+      objecticon: "sap-icon://None",
+      lectura: item.requiresSerial ? null : "Sin serial",
+      objectstate2: "Warning",
       barcodeChecked: false,
       serials: [],
     })),
@@ -186,7 +220,7 @@ export function createDispatchStore(seeds: DemoOrder[]) {
 
   function requireCurrentItem(orderId: string, itemId: string) {
     const order = findOrder(orderId);
-    if (order.completedAt) {
+    if (isOrderComplete(order)) {
       throw new DispatchError("Esta orden ya fue despachada.", 409, order);
     }
     const item = getCurrentItem(order);
@@ -261,6 +295,8 @@ export function createDispatchStore(seeds: DemoOrder[]) {
         throw new DispatchError("Debes validar todos los artículos y sus seriales.", 409);
       }
       order.completedAt ??= new Date().toISOString();
+      order.conformado = "Finalizado";
+      order.fecfinal = order.completedAt;
       return copyOrder(order);
     },
     getDemoCode(order: DispatchOrder) {

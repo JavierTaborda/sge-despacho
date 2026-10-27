@@ -1,199 +1,278 @@
-import type { DispatchOrder } from "../domain/dispatch.ts";
+import { DispatchError } from "../domain/dispatch.ts";
+import type {
+  DispatchItem,
+  DispatchOrder,
+  DispatchStatus,
+  Dtpredes,
+} from "../domain/dispatch.ts";
 
-export type CbpredesPayload = {
-  prednum: number | string;
-  pednum?: number | string | null;
-  profite?: number | boolean | null;
-  estatus?: number | null;
-  fecemis?: string | null;
-  codcli?: string | null;
-  codzon?: string | null;
-  codven?: string | null;
-  horainicio?: string | null;
-  horafinal?: string | null;
-  cantped?: number | null;
-  cantreng?: number | null;
-  cantdesp?: number | null;
-  cantcarga?: number | null;
-  totneto?: number | string | null;
-  parcial?: number | boolean | null;
-  compuesto?: number | boolean | null;
-  codtrans?: string | null;
-  codchofer?: number | null;
-  placa?: string | null;
-  proceso?: number | boolean | null;
-  comentario?: string | null;
-  owneruser?: number | null;
-  fecdesp?: string | null;
-  fecfinal?: string | null;
-  cerrado?: number | boolean | null;
-  anulado?: number | boolean | null;
-  cliente?: string | null;
-  Cliente?: string | null;
-  direccion?: string | null;
-  Zona?: string | null;
-  Vendedor?: string | null;
-  co_cli?: string | null;
-  co_zon?: string | null;
-  co_ven?: string | null;
-  fecfinalStr?: string | null;
-  supervisor?: string | null;
-};
-
-export type DtpredesPayload = {
-  prednum: number | string;
-  itemnum: number | string;
-  pednum?: number | string | null;
-  rennum?: number | string | null;
-  codart?: string | null;
-  compuesto?: number | boolean | null;
-  manjser?: number | boolean | null;
-  codalma?: string | null;
-  codbarra?: string | null;
-  serial1?: string | null;
-  refbarra?: string | null;
-  recouser?: number | null;
-  horacapture?: string | null;
-  artdes?: string | null;
-  Articulo?: string | null;
-};
-
-type BackendDispatchPayload = {
-  headers?: CbpredesPayload[];
-  cabeceras?: CbpredesPayload[];
-  cbpredes?: CbpredesPayload[];
-  lines?: DtpredesPayload[];
-  items?: DtpredesPayload[];
-  detalles?: DtpredesPayload[];
-  dtpredes?: DtpredesPayload[];
-  mvpredes?: DtpredesPayload[];
-};
-
-function text(value: unknown, fallback: string) {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+export interface BackendDispatchOrder {
+  prednum: number;
+  pednum: number;
+  conformado: DispatchStatus;
+  fecdesp: string;
+  fecfinalStr: string | null;
+  fecfinal: string | null;
+  duracion: string | null;
+  co_cli: string;
+  Cliente: string | null;
+  co_zon: string;
+  Zona: string | null;
+  co_ven: string;
+  Vendedor: string | null;
+  cantdesp: number;
+  owneruser: string;
+  supervisor: string | null;
 }
 
-function number(value: unknown, fallback: number) {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+export type BackendDispatchItem = Dtpredes;
+
+export interface DispatchOrderParams {
+  prednum: number;
+  pednum: number;
 }
 
-function isEnabled(value: unknown) {
-  return value === true || value === 1 || value === "1";
-}
-
-function headerRows(payload: BackendDispatchPayload) {
-  return payload.headers ?? payload.cabeceras ?? payload.cbpredes ?? [];
-}
-
-function lineRows(payload: BackendDispatchPayload) {
-  return payload.lines
-    ?? payload.items
-    ?? payload.detalles
-    ?? payload.dtpredes
-    ?? payload.mvpredes
-    ?? [];
-}
-
-function mapHeader(header: CbpredesPayload, lines: DtpredesPayload[]): DispatchOrder {
-  const orderId = String(header.prednum);
-  const orderLines = lines.filter((line) => String(line.prednum) === orderId);
-  const completed = header.fecfinal ?? header.fecfinalStr ?? (isEnabled(header.cerrado) ? header.fecdesp : null);
-  const firstLineByArticle = new Map<string, DtpredesPayload[]>();
-  for (const line of orderLines) {
-    const key = `${line.itemnum}:${line.codart ?? ""}:${line.codbarra ?? line.refbarra ?? ""}`;
-    firstLineByArticle.set(key, [...(firstLineByArticle.get(key) ?? []), line]);
-  }
-
-  return {
-    prednum: number(header.prednum, 0),
-    pednum: number(header.pednum, 0),
-    profite: isEnabled(header.profite),
-    estatus: number(header.estatus, 0),
-    fecemis: text(header.fecemis, ""),
-    fecdesp: text(header.fecdesp, ""),
-    fecfinal: header.fecfinal ?? header.fecfinalStr ?? null,
-    horainicio: header.horainicio ?? null,
-    horafinal: header.horafinal ?? null,
-    codcli: text(header.co_cli, text(header.codcli, "")),
-    codzon: text(header.co_zon, text(header.codzon, "")),
-    codven: text(header.co_ven, text(header.codven, "")),
-    cantped: number(header.cantped, 1),
-    cantreng: number(header.cantreng, orderLines.length),
-    cantdesp: number(header.cantdesp, 0),
-    cantcarga: number(header.cantcarga, 0),
-    totneto: number(header.totneto, 0),
-    parcial: isEnabled(header.parcial),
-    compuesto: isEnabled(header.compuesto),
-    codtrans: header.codtrans ?? null,
-    codchofer: number(header.codchofer, 0),
-    placa: header.placa ?? null,
-    cerrado: isEnabled(header.cerrado),
-    anulado: isEnabled(header.anulado),
-    proceso: isEnabled(header.proceso),
-    comentario: header.comentario ?? null,
-    owneruser: number(header.owneruser, 1),
-    id: orderId,
-    customer: text(header.Cliente, text(header.cliente, text(header.co_cli, text(header.codcli, "Cliente sin nombre")))),
-    address: text(header.Zona, text(header.direccion, text(header.co_zon, text(header.codzon, "Zona no informada")))),
-    scheduledAt: text(header.fecdesp, "Sin fecha de despacho"),
-    vendedor: text(header.Vendedor, text(header.co_ven, text(header.codven, "Vendedor no informado"))),
-    supervisor: text(header.supervisor, ""),
-    completedAt: completed ?? null,
-    items: [...firstLineByArticle.values()].map((lineGroup, index) => {
-      const line = lineGroup[0];
-      const barcode = text(line.refbarra, text(line.codbarra, ""));
-      const serials = lineGroup
-        .map((entry) => text(entry.serial1, ""))
-        .filter(Boolean);
-      return {
-        prednum: number(line.prednum, number(header.prednum, 0)),
-        itemnum: number(line.itemnum, index + 1),
-        pednum: number(line.pednum, number(header.pednum, 0)),
-        rennum: number(line.rennum, 0),
-        codart: text(line.codart, ""),
-        compuesto: isEnabled(line.compuesto),
-        manjser: isEnabled(line.manjser),
-        codalma: text(line.codalma, ""),
-        codbarra: line.codbarra ?? null,
-        serial1: line.serial1 ?? null,
-        refbarra: line.refbarra ?? null,
-        recouser: number(line.recouser, 1),
-        horacapture: line.horacapture ?? null,
-        id: `${orderId}-${text(line.itemnum, String(index + 1))}`,
-        name: text(line.Articulo, text(line.artdes, text(line.codart, "Artículo sin descripción"))),
-        sku: text(line.codart, "SIN SKU"),
-        barcode,
-        quantity: Math.max(1, lineGroup.length),
-        location: text(line.codalma, "Sin ubicación"),
-        requiresSerial: isEnabled(line.manjser) || serials.length > 0,
-        barcodeChecked: false,
-        serials,
-      };
-    }),
+export interface DispatchApi {
+  listOrders: {
+    method: "GET";
+    path: "/api/dispatch/orders";
+    response: BackendDispatchOrder[];
+  };
+  getOrder: {
+    method: "GET";
+    path: "/api/dispatch/orders/:prednum/:pednum";
+    params: DispatchOrderParams;
+    response: BackendDispatchOrder;
+  };
+  getOrderItems: {
+    method: "GET";
+    path: "/api/dispatch/orders/:prednum/:pednum/items";
+    params: DispatchOrderParams;
+    response: BackendDispatchItem[];
   };
 }
 
-export function mapBackendDispatchPayload(payload: unknown): DispatchOrder[] {
-  if (!payload || typeof payload !== "object") return [];
-  if ("orders" in payload && Array.isArray(payload.orders)) {
-    return payload.orders as DispatchOrder[];
-  }
+type JsonRecord = Record<string, unknown>;
 
-  const data = "data" in payload && payload.data && typeof payload.data === "object"
-    ? payload.data
-    : payload;
-  if (!data || typeof data !== "object") return [];
-
-  const typed = data as BackendDispatchPayload;
-  const headers = headerRows(typed);
-  const lines = lineRows(typed);
-  return headers
-    .filter((header) => !isEnabled(header.anulado))
-    .map((header) => mapHeader(header, lines));
+function isRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export function mapBackendDispatchDetail(payload: unknown, orderId: string) {
-  const orders = mapBackendDispatchPayload(payload);
-  return orders.find((order) => order.id === orderId);
+function record(value: unknown, context: string) {
+  if (!isRecord(value)) {
+    throw new DispatchError(`Respuesta inválida del backend: ${context} debe ser un objeto.`, 502);
+  }
+  return value;
+}
+
+function field<T>(
+  row: JsonRecord,
+  key: string,
+  guard: (value: unknown) => value is T,
+  context: string,
+): T {
+  const value = row[key];
+  if (!guard(value)) {
+    throw new DispatchError(`Respuesta inválida del backend: ${context}.${key}.`, 502);
+  }
+  return value;
+}
+
+const isString = (value: unknown): value is string => typeof value === "string";
+const isNullableString = (value: unknown): value is string | null =>
+  value === null || isString(value);
+const isNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+const isIdentifier = (value: unknown): value is number =>
+  isNumber(value) && Number.isSafeInteger(value) && value >= 0;
+const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
+const isStatus = (value: unknown): value is DispatchStatus =>
+  value === "En despacho" || value === "Finalizado";
+const isLectura = (value: unknown): value is "Sin serial" | null =>
+  value === null || value === "Sin serial";
+
+function literal<T extends string | boolean>(
+  row: JsonRecord,
+  key: string,
+  expected: T,
+  context: string,
+) {
+  return field(row, key, (value): value is T => value === expected, context);
+}
+
+function parseHeader(value: unknown, context: string): BackendDispatchOrder {
+  const row = record(value, context);
+  return {
+    prednum: field(row, "prednum", isIdentifier, context),
+    pednum: field(row, "pednum", isIdentifier, context),
+    conformado: field(row, "conformado", isStatus, context),
+    fecdesp: field(row, "fecdesp", isString, context),
+    fecfinalStr: field(row, "fecfinalStr", isNullableString, context),
+    fecfinal: field(row, "fecfinal", isNullableString, context),
+    duracion: field(row, "duracion", isNullableString, context),
+    co_cli: field(row, "co_cli", isString, context),
+    Cliente: field(row, "Cliente", isNullableString, context),
+    co_zon: field(row, "co_zon", isString, context),
+    Zona: field(row, "Zona", isNullableString, context),
+    co_ven: field(row, "co_ven", isString, context),
+    Vendedor: field(row, "Vendedor", isNullableString, context),
+    cantdesp: field(row, "cantdesp", isNumber, context),
+    owneruser: field(row, "owneruser", isString, context),
+    supervisor: field(row, "supervisor", isNullableString, context),
+  };
+}
+
+function parseItem(value: unknown, context: string): BackendDispatchItem {
+  const row = record(value, context);
+  return {
+    prednum: field(row, "prednum", isIdentifier, context),
+    itemnum: field(row, "itemnum", isIdentifier, context),
+    pednum: field(row, "pednum", isIdentifier, context),
+    rennum: field(row, "rennum", isIdentifier, context),
+    codalma: field(row, "codalma", isString, context),
+    codart: field(row, "codart", isString, context),
+    artdes: field(row, "artdes", isNullableString, context),
+    Articulo: field(row, "Articulo", isString, context),
+    refbarra: field(row, "refbarra", isNullableString, context),
+    compuesto: field(row, "compuesto", isNumber, context),
+    manjser: field(row, "manjser", isBoolean, context),
+    codbarra: field(row, "codbarra", isNullableString, context),
+    serial1: field(row, "serial1", isNullableString, context),
+    recouser: field(row, "recouser", isString, context),
+    supervisor: field(row, "supervisor", isNullableString, context),
+    horacapture: field(row, "horacapture", isNullableString, context),
+    changed: literal(row, "changed", false, context),
+    selected: literal(row, "selected", false, context),
+    objectstate: literal(row, "objectstate", "None", context),
+    objecticon: literal(row, "objecticon", "sap-icon://None", context),
+    lectura: field(row, "lectura", isLectura, context),
+    objectstate2: literal(row, "objectstate2", "Warning", context),
+  };
+}
+
+export function getBackendOrderId(params: DispatchOrderParams) {
+  return `${params.prednum}-${params.pednum}`;
+}
+
+export function parseBackendOrderId(id: string): DispatchOrderParams {
+  const match = /^(\d+)-(\d+)$/.exec(id);
+  if (!match) {
+    throw new DispatchError("La orden requiere los identificadores prednum y pednum.", 400);
+  }
+  const prednum = Number(match[1]);
+  const pednum = Number(match[2]);
+  if (!isIdentifier(prednum) || !isIdentifier(pednum)) {
+    throw new DispatchError("Los identificadores de la orden no son válidos.", 400);
+  }
+  return { prednum, pednum };
+}
+
+function displayText(value: string | null, fallback: string) {
+  return value?.trim() || fallback;
+}
+
+function mapHeader(header: BackendDispatchOrder): DispatchOrder {
+  return {
+    ...header,
+    profite: false,
+    estatus: 0,
+    fecemis: "",
+    horainicio: null,
+    horafinal: null,
+    codcli: header.co_cli,
+    codzon: header.co_zon,
+    codven: header.co_ven,
+    cantped: 0,
+    cantreng: 0,
+    cantcarga: 0,
+    totneto: 0,
+    parcial: false,
+    compuesto: false,
+    codtrans: null,
+    codchofer: 0,
+    placa: null,
+    cerrado: header.conformado === "Finalizado",
+    anulado: false,
+    proceso: false,
+    comentario: null,
+    id: getBackendOrderId(header),
+    customer: displayText(header.Cliente, header.co_cli || "Cliente sin nombre"),
+    address: displayText(header.Zona, header.co_zon || "Zona no informada"),
+    scheduledAt: displayText(header.fecdesp, "Sin fecha de despacho"),
+    vendedor: displayText(header.Vendedor, header.co_ven || "Vendedor no informado"),
+    supervisor: header.supervisor ?? "",
+    completedAt: header.fecfinal,
+    itemsLoaded: false,
+    items: [],
+  };
+}
+
+function mapItem(line: BackendDispatchItem): DispatchItem {
+  const serial = line.serial1?.trim();
+  return {
+    ...line,
+    id: `${getBackendOrderId(line)}-${line.itemnum}`,
+    name: displayText(line.Articulo, displayText(line.artdes, line.codart)),
+    sku: line.codart,
+    barcode: line.refbarra?.trim() ?? "",
+    quantity: 1,
+    location: displayText(line.codalma, "Sin ubicación"),
+    requiresSerial: line.manjser,
+    barcodeChecked: !!line.codbarra?.trim(),
+    serials: serial ? [serial] : [],
+  };
+}
+
+export function parseBackendDispatchOrders(payload: unknown): BackendDispatchOrder[] {
+  if (!Array.isArray(payload)) {
+    throw new DispatchError("Respuesta inválida del backend: se esperaba una lista de órdenes.", 502);
+  }
+  const ids = new Set<string>();
+  return payload.map((value, index) => {
+    const order = parseHeader(value, `orders[${index}]`);
+    const id = getBackendOrderId(order);
+    if (ids.has(id)) {
+      throw new DispatchError(`Respuesta inválida del backend: orden duplicada ${id}.`, 502);
+    }
+    ids.add(id);
+    return order;
+  });
+}
+
+export function mapBackendDispatchPayload(payload: unknown): DispatchOrder[] {
+  return parseBackendDispatchOrders(payload).map(mapHeader);
+}
+
+export function parseBackendDispatchItems(
+  payload: unknown,
+  params: DispatchOrderParams,
+): BackendDispatchItem[] {
+  if (!Array.isArray(payload)) {
+    throw new DispatchError("Respuesta inválida del backend: se esperaba una lista de artículos.", 502);
+  }
+  const ids = new Set<number>();
+  return payload.map((value, index) => {
+    const line = parseItem(value, `items[${index}]`);
+    if (line.prednum !== params.prednum || line.pednum !== params.pednum) {
+      throw new DispatchError("El backend devolvió un artículo de otra orden.", 502);
+    }
+    if (ids.has(line.itemnum)) {
+      throw new DispatchError(`Respuesta inválida del backend: itemnum duplicado ${line.itemnum}.`, 502);
+    }
+    ids.add(line.itemnum);
+    return line;
+  });
+}
+
+export function mapBackendDispatchDetail(
+  payload: unknown,
+  params: DispatchOrderParams,
+  itemsPayload: unknown,
+): DispatchOrder {
+  const header = parseHeader(payload, "order");
+  if (header.prednum !== params.prednum || header.pednum !== params.pednum) {
+    throw new DispatchError("El backend devolvió una orden diferente a la solicitada.", 502);
+  }
+  const items = parseBackendDispatchItems(itemsPayload, params).map(mapItem);
+  return { ...mapHeader(header), items, itemsLoaded: true, cantreng: items.length };
 }

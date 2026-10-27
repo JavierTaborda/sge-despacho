@@ -14,7 +14,6 @@ import {
   isItemComplete,
   type DemoOrder,
 } from "../src/domain/dispatch.ts";
-import { mapBackendDispatchPayload } from "../src/services/backend-dispatch.ts";
 import { createMockAdapter } from "../src/services/dispatch-api.ts";
 
 const serializedSeed = demoOrders[0].items[0];
@@ -78,71 +77,6 @@ test("loads the two provided dispatches and protects mutable store state", () =>
   orders[0].items[0].serials.push("INVALID");
   assert.equal(store.getOrder("OD-1048").items[0].barcodeChecked, false);
   assert.deepEqual(store.getOrder("OD-1048").items[0].serials, []);
-});
-
-test("maps cbpredes and mvpredes rows to dispatch orders", () => {
-  const orders = mapBackendDispatchPayload({
-    cbpredes: [{
-      prednum: 603011,
-      pednum: 946216,
-      codcli: "COFR-20",
-        codzon: "N01000",
-      fecdesp: "2026-10-21",
-    }],
-    dtpredes: [{
-      prednum: 603011,
-      itemnum: 1,
-        codart: "7590020007170",
-        codbarra: "7590020007170",
-        codalma: "01",
-        manjser: 1,
-      serial1: "SN-001",
-      cantped: 1,
-    }],
-  });
-
-  assert.equal(orders.length, 1);
-  assert.equal(orders[0].id, "603011");
-  assert.equal(orders[0].customer, "COFR-20");
-  assert.equal(orders[0].items[0].id, "603011-1");
-  assert.equal(orders[0].items[0].barcode, "7590020007170");
-  assert.equal(orders[0].items[0].requiresSerial, true);
-  assert.equal(orders[0].items[0].location, "01");
-});
-
-test("maps real header aliases and treats refbarra as expected barcode", () => {
-  const [order] = mapBackendDispatchPayload({
-    cbpredes: [{
-      prednum: 6242,
-      pednum: 19665,
-      co_cli: "00734",
-      Cliente: "AVIR AL BOUNNAY DE AL PONY",
-      co_zon: "0002",
-      Zona: "TACHIRA",
-      co_ven: "00004",
-      Vendedor: "DESSIRE MARTINEZ",
-      fecdesp: "2026-10-23 09:32:56",
-    }],
-    dtpredes: [{
-      prednum: 6242,
-      itemnum: 1,
-      pednum: 19665,
-      rennum: 1,
-      codart: "AVFR-12W",
-      artdes: "AIRE DE VENTANA FRIGILUX",
-      Articulo: "AVFR-12W - AIRE DE VENTANA FRIGILUX",
-      refbarra: "7590020007163",
-      codbarra: null,
-      manjser: true,
-    }],
-  });
-
-  assert.equal(order.customer, "AVIR AL BOUNNAY DE AL PONY");
-  assert.equal(order.address, "TACHIRA");
-  assert.equal(order.vendedor, "DESSIRE MARTINEZ");
-  assert.equal(order.items[0].barcode, "7590020007163");
-  assert.equal(order.items[0].codbarra, null);
-  assert.equal(order.items[0].name, "AVFR-12W - AIRE DE VENTANA FRIGILUX");
 });
 
 test("rejects incorrect and empty barcodes rather than returning serial: false", () => {
@@ -311,9 +245,12 @@ test("unknown orders return an explicit 404", () => {
 test("Axios mock handles real JSON-transformed requests and error responses", async () => {
   const store = setup();
   const api = create({ adapter: createMockAdapter(store, 0) });
-  const list = await api.get("/ordenes-despacho");
+  const list = await api.get("/api/dispatch/orders");
   assert.equal(list.status, 200);
-  assert.equal(list.data.orders.length, 1);
+  assert.equal(list.data.length, 1);
+  assert.equal(list.data[0].conformado, "En despacho");
+  assert.equal(list.data[0].cantdesp, 5);
+  assert.equal("items" in list.data[0], false);
   const detail = await api.get("/ordenes-despacho/OD-1048");
   assert.equal(detail.data.order.id, "OD-1048");
   const scan = await api.post("/check-codigo-barra", {

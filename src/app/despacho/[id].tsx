@@ -20,17 +20,21 @@ import {
   getCurrentItem,
   getOrderProgress,
   isItemComplete,
+  isOrderComplete,
   type DispatchOrder,
 } from "@/domain/dispatch";
 import { useBarcodeScanner } from "@/hooks/use-barcode-scanner";
 import {
   checkBarcode,
   checkSerial,
+  canWriteDispatch,
+  backendReadOnlyMessage,
   completeDispatch,
   getDemoCode,
   getDispatchOrder,
   getErrorMessage,
   getErrorOrder,
+  isBackendMode,
 } from "@/services/dispatch-api";
 
 export default function DispatchRoute() {
@@ -53,7 +57,7 @@ function DispatchScreen({ id }: { id: string }) {
   const refocusAfterScan = useRef(false);
   const requestInFlight = useRef(false);
   const mounted = useRef(true);
-  const validationFlash = useRef(new Animated.Value(0)).current;
+  const [validationFlash] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     if (validationState !== "success") return;
@@ -110,6 +114,7 @@ function DispatchScreen({ id }: { id: string }) {
   }, [busy]);
 
   const item = order ? getCurrentItem(order) : undefined;
+  const orderCompleted = !!order && isOrderComplete(order);
   const serialMode = !!item?.barcodeChecked && !!item.requiresSerial;
   const progress = order
     ? getOrderProgress(order)
@@ -119,6 +124,10 @@ function DispatchScreen({ id }: { id: string }) {
   const demoCode = order && item ? getDemoCode(order) : null;
 
   async function submitScan(value: string) {
+    if (!canWriteDispatch) {
+      setError(backendReadOnlyMessage);
+      return;
+    }
     if (requestInFlight.current || !order || !item) return;
     if (!value.trim() && !serialMode) {
       setError("Escanea o escribe un código antes de validar.");
@@ -187,13 +196,17 @@ function DispatchScreen({ id }: { id: string }) {
   }
 
   const camera = useBarcodeScanner({
-    disabled: busy,
+    disabled: busy || !canWriteDispatch,
     onScanned: (value) => {
       void submitScan(value);
     },
   });
 
   async function confirmDispatch() {
+    if (!canWriteDispatch) {
+      setError(backendReadOnlyMessage);
+      return;
+    }
     if (!order || requestInFlight.current) return;
     requestInFlight.current = true;
     setBusy(true);
@@ -238,9 +251,11 @@ function DispatchScreen({ id }: { id: string }) {
               <Icon name="arrow-back" size={22} />
             </Pressable>
             <Text className="flex-1 text-[15px] font-bold text-ink">
-              {order?.completedAt
-                ? "Comprobante de despacho"
-                : "Preparar despacho"}
+              {isBackendMode
+                ? "Detalle de despacho"
+                : orderCompleted
+                  ? "Comprobante de despacho"
+                  : "Preparar despacho"}
             </Text>
             <View className="h-9 w-9 items-center justify-center">
               <Icon
@@ -282,7 +297,7 @@ function DispatchScreen({ id }: { id: string }) {
                   <View className="min-w-0 flex-1 gap-0.5">
                     <View className="flex-row items-center gap-2">
                       <Text className="text-[15px] font-extrabold text-ink">
-                        {order.id}
+                        {order.prednum} · Pedido {order.pednum}
                       </Text>
                     </View>
                     <Text
@@ -304,7 +319,7 @@ function DispatchScreen({ id }: { id: string }) {
                 <ProgressBar percent={progress.percent} />
               </View>
 
-              {order.completedAt ? (
+              {orderCompleted ? (
                 <View className="gap-4 rounded-3xl border border-success-border bg-surface p-6">
                   <View className="h-[78px] w-[78px] items-center justify-center self-center rounded-full bg-secondary-light">
                     <Icon
@@ -317,24 +332,45 @@ function DispatchScreen({ id }: { id: string }) {
                     ¡Despacho listo!
                   </Text>
                   <Text className="text-center text-[13px] leading-5 text-muted">
-                    Cada artículo verificado. Cada serial en su lugar.
+                    {isBackendMode
+                      ? "El backend informa que esta orden está finalizada."
+                      : "Cada artículo verificado. Cada serial en su lugar."}
                   </Text>
                   <View className="my-[5px] items-center gap-[7px] border-y border-dashed border-line py-5">
                     <Text className="text-[9px] font-semibold tracking-[1.5px] text-muted">
-                      CONFIRMACIÓN DEMO
+                      {isBackendMode ? "ESTADO DEL BACKEND: FINALIZADO" : "CONFIRMACIÓN DEMO"}
                     </Text>
                     <Text className="text-[18px] font-bold text-ink">
-                      SGE-{order.id}
+                      {isBackendMode
+                        ? `Despacho ${order.prednum} · Pedido ${order.pednum}`
+                        : `SGE-${order.id}`}
                     </Text>
                     <Text className="text-[11px] text-muted">
-                      {new Date(order.completedAt).toLocaleString("es-CL")}
+                      {order.fecfinalStr || order.completedAt || "Fecha de finalización no informada"}
                     </Text>
+                    {!!order.duracion && (
+                      <Text className="text-[11px] text-muted">Duración: {order.duracion}</Text>
+                    )}
                   </View>
                   <Button
                     title="Volver a mis órdenes"
                     icon="arrow-forward"
                     onPress={() => router.replace("/")}
                   />
+                </View>
+              ) : !canWriteDispatch ? (
+                <View className="gap-3.5 rounded-3xl border border-line bg-surface p-5">
+                  <View className="flex-row items-center gap-2">
+                    <Icon name="eye-outline" size={23} color={colors.primary} />
+                    <Text className="text-[18px] font-bold text-ink">Solo consulta</Text>
+                    <Badge>{order.conformado}</Badge>
+                  </View>
+                  <Text className="text-[13px] leading-5 text-muted">
+                    {backendReadOnlyMessage}
+                  </Text>
+                  <Text className="text-[12px] text-muted">
+                    Cantidad de despacho: {order.cantdesp} · Responsable: {order.owneruser}
+                  </Text>
                 </View>
               ) : item ? (
                 <Animated.View
@@ -395,11 +431,11 @@ function DispatchScreen({ id }: { id: string }) {
                             size={13}
                             color={colors.surface}
                           />
-                        ) : (
+                        ) : order.items.length ? (
                           <Text className="text-[10px] font-bold text-surface">
                             1
                           </Text>
-                        )}
+                        ) : <Text className="text-[13px] text-muted">Esta orden no tiene artículos.</Text>}
                       </View>
                       <Text
                         className={`text-[10px] ${
@@ -664,19 +700,19 @@ function DispatchScreen({ id }: { id: string }) {
               )}
 
               {!!error && <Notice message={error} />}
-              {!!feedback && !order.completedAt && (
+              {!!feedback && !orderCompleted && (
                 <Notice message={feedback} success />
               )}
 
               <View className="mt-2 flex-row items-center justify-between">
                 <Text className="text-[17px] font-bold tracking-[-0.3px] text-ink">
-                  {order.completedAt
+                  {orderCompleted
                     ? "Detalle de lo preparado"
                     : "Secuencia de preparación"}
                 </Text>
                 <Icon name="list-outline" size={20} color={colors.muted} />
               </View>
-              {!order.completedAt && (
+              {!orderCompleted && canWriteDispatch && (
                 <View className="-mt-[9px] flex-row items-start gap-[5px]">
                   <Icon
                     name="lock-closed-outline"
@@ -689,6 +725,11 @@ function DispatchScreen({ id }: { id: string }) {
                 </View>
               )}
               <View className="rounded-[20px] border border-line bg-surface px-4">
+                {!order.items.length && (
+                  <Text className="py-[18px] text-[13px] text-muted">
+                    El backend no devolvió artículos para esta orden.
+                  </Text>
+                )}
                 {order.items.map((line, index) => {
                   const done = isItemComplete(line);
                   const current = item?.id === line.id;
@@ -735,21 +776,42 @@ function DispatchScreen({ id }: { id: string }) {
                           {line.name}
                         </Text>
                         <Text className="mt-[3px] text-[10px] leading-[15px] text-muted">
+                          Ítem {line.itemnum} · Renglón {line.rennum} · Almacén {line.codalma}
+                        </Text>
+                        <Text className="mt-[3px] text-[10px] leading-[15px] text-muted">
                           {line.quantity}{" "}
                           {line.quantity === 1 ? "unidad" : "unidades"} ·{" "}
                           {line.requiresSerial
                             ? `${line.serials.length}/${line.quantity} seriales`
                             : "Sin serial"}
                         </Text>
+                        <Text selectable className="mt-[5px] text-[10px] leading-[15px] text-muted">
+                          Referencia: {line.refbarra || "Sin código de barras"}
+                        </Text>
+                        {!!line.codbarra && (
+                          <Text selectable className="mt-[5px] text-[10px] leading-[15px] text-muted">
+                            Código capturado: {line.codbarra}
+                          </Text>
+                        )}
+                        {!!line.lectura && isBackendMode && (
+                          <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
+                            Lectura del backend: {line.lectura}
+                          </Text>
+                        )}
                         {line.serials.map((serial) => (
                           <Text
                             key={serial}
                             selectable
                             className="mt-[5px] text-[10px] text-secondary"
                           >
-                            {serial}
+                            Serial: {serial}
                           </Text>
                         ))}
+                        {isBackendMode && !!line.horacapture && (
+                          <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
+                            Captura: {line.horacapture} · Usuario: {line.recouser}
+                          </Text>
+                        )}
                       </View>
                       <Text
                         className={`mt-1 text-[9px] font-bold ${
@@ -767,8 +829,9 @@ function DispatchScreen({ id }: { id: string }) {
                 })}
               </View>
               <Text className="text-center text-[9px] leading-4 text-muted">
-                Entorno de prueba · Datos simulados · Sin conexión a un backend
-                real
+                {isBackendMode
+                  ? "Backend real · Solo consulta · No se envían capturas ni confirmaciones"
+                  : "Entorno de prueba · Datos simulados · Sin conexión a un backend real"}
               </Text>
             </ScrollView>
           )}
