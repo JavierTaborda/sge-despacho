@@ -218,7 +218,7 @@ function mapItem(line: BackendDispatchItem): DispatchItem {
     quantity: 1,
     location: displayText(line.codalma, "Sin ubicación"),
     requiresSerial: line.manjser,
-    barcodeChecked: !!line.codbarra?.trim(),
+    barcodeChecked: !line.manjser && !!line.codbarra?.trim(),
     serials: serial ? [serial] : [],
   };
 }

@@ -1,7 +1,9 @@
 import {
-    useCameraPermissions,
-    type BarcodeScanningResult,
+  useCameraPermissions,
+  type BarcodeScanningResult,
+  type CameraMountError,
 } from "expo-camera";
+import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type UseBarcodeScannerOptions = {
@@ -15,9 +17,9 @@ export function useBarcodeScanner({
 }: UseBarcodeScannerOptions) {
   const [permission, requestPermission] = useCameraPermissions();
   const [cameraEnabled, setCameraEnabled] = useState(false);
-  const [hasScanned, setHasScanned] = useState(false);
   const [permissionDenied, setPermissionDenied] = useState(false);
-  const resetScanTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [error, setError] = useState("");
+  const scanLocked = useRef(false);
 
   useEffect(() => {
     if (!cameraEnabled || !permission || permission.granted) return;
@@ -27,20 +29,33 @@ export function useBarcodeScanner({
     }
 
     let active = true;
-    void requestPermission().then((result) => {
-      if (active) setPermissionDenied(!result.granted);
-    });
+    void requestPermission()
+      .then((result) => {
+        if (active) setPermissionDenied(!result.granted);
+      })
+      .catch((reason: unknown) => {
+        if (!active) return;
+        setError(
+          reason instanceof Error
+            ? `No se pudo solicitar la cámara: ${reason.message}`
+            : "No se pudo solicitar el permiso de cámara. Usa el lector o ingresa el código.",
+        );
+        setCameraEnabled(false);
+      });
 
     return () => {
       active = false;
     };
   }, [cameraEnabled, permission, requestPermission]);
 
-  useEffect(() => {
-    return () => {
-      if (resetScanTimer.current) clearTimeout(resetScanTimer.current);
-    };
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        scanLocked.current = true;
+        setCameraEnabled(false);
+      };
+    }, []),
+  );
 
   const handleBarcodeScanned = useCallback(
     ({ data }: BarcodeScanningResult) => {
@@ -48,31 +63,35 @@ export function useBarcodeScanner({
         disabled ||
         !cameraEnabled ||
         !permission?.granted ||
-        hasScanned ||
+        scanLocked.current ||
         !data.trim()
       ) {
         return;
       }
 
-      setHasScanned(true);
+      scanLocked.current = true;
+      setCameraEnabled(false);
       onScanned(data.trim());
-      resetScanTimer.current = setTimeout(() => {
-        setHasScanned(false);
-      }, 800);
     },
-    [cameraEnabled, disabled, hasScanned, onScanned, permission?.granted],
+    [cameraEnabled, disabled, onScanned, permission?.granted],
   );
 
   return {
     cameraEnabled,
     cameraReady: permission?.granted === true,
+    error,
     permissionDenied:
       permissionDenied ||
       (permission?.status === "denied" && !permission.canAskAgain),
     handleBarcodeScanned,
+    handleMountError: ({ message }: CameraMountError) => {
+      setError(`No se pudo iniciar la cámara: ${message}. Usa el lector o ingresa el código.`);
+      setCameraEnabled(false);
+    },
     toggleCamera: () => {
+      scanLocked.current = false;
+      setError("");
       setCameraEnabled((enabled) => !enabled);
-      setHasScanned(false);
     },
   };
 }

@@ -14,7 +14,7 @@ import { Badge, Button, Icon, Notice } from "@/components/ui";
 import { colors, shadows } from "@/constants/theme";
 import { useDispatchOrders } from "@/hooks/use-dispatch-orders";
 import { getBackendOrderId, type BackendDispatchOrder } from "@/services/backend-dispatch";
-import { canWriteDispatch } from "@/services/dispatch-api";
+import { isBackendMode } from "@/services/dispatch-api";
 
 function OrderCard({ order }: { order: BackendDispatchOrder }) {
   const completed = order.conformado === "Finalizado";
@@ -25,7 +25,7 @@ function OrderCard({ order }: { order: BackendDispatchOrder }) {
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`Predespacho ${order.prednum}, pedido ${order.pednum}, ${customer}, ${order.conformado}, cantidad ${order.cantdesp}. ${
-        completed ? "Ver detalle" : canWriteDispatch ? "Preparar orden" : "Consultar orden"
+        completed ? "Ver detalle" : isBackendMode ? "Escanear localmente" : "Preparar orden"
       }`}
       onPress={() =>
         router.push({ pathname: "/despacho/[id]", params: { id: getBackendOrderId(order) } })
@@ -104,9 +104,9 @@ function OrderCard({ order }: { order: BackendDispatchOrder }) {
         </View>
         <View className="flex-row items-center gap-[5px]">
           <Text className="text-[12px] font-bold text-primary">
-            {completed || !canWriteDispatch
+            {completed
               ? "Ver detalle"
-              : "Preparar"}
+              : isBackendMode ? "Escanear" : "Preparar"}
           </Text>
           <Icon name="arrow-forward" size={18} color={colors.primary} />
         </View>

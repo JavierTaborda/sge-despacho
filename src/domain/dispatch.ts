@@ -212,6 +212,32 @@ export function createDispatchStore(seeds: DemoOrder[]) {
     })),
   }));
 
+  function expectedSerials(orderId: string, itemId: string) {
+    const item = seeds
+      .find((order) => order.id === orderId)
+      ?.items.find((entry) => entry.id === itemId);
+    if (!item) throw new DispatchError("No encontramos este artículo.", 404);
+    return item.expectedSerials;
+  }
+
+  return {
+    ...createDispatchCaptureStore(orders),
+    getDemoCode(order: DispatchOrder) {
+      const item = getCurrentItem(order);
+      if (!item) return null;
+      if (!item.barcodeChecked) return item.barcode;
+      return (
+        expectedSerials(order.id, item.id).find(
+          (serial) => !item.serials.includes(serial),
+        ) ?? `DEMO-${item.id}`
+      );
+    },
+  };
+}
+
+export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) {
+  const orders = initialOrders.map(copyOrder);
+
   function findOrder(orderId: string) {
     const order = orders.find((entry) => entry.id === orderId);
     if (!order) throw new DispatchError("No encontramos esta orden de despacho.", 404);
@@ -234,21 +260,27 @@ export function createDispatchStore(seeds: DemoOrder[]) {
     return { order, item };
   }
 
-  function expectedSerials(orderId: string, itemId: string) {
-    const item = seeds
-      .find((order) => order.id === orderId)
-      ?.items.find((entry) => entry.id === itemId);
-    if (!item) throw new DispatchError("No encontramos este artículo.", 404);
-    return item.expectedSerials;
-  }
-
   return {
+    hasOrder: (orderId: string) => orders.some((order) => order.id === orderId),
+    registerOrder(order: DispatchOrder) {
+      if (!orders.some((entry) => entry.id === order.id)) {
+        orders.push(copyOrder(order));
+      }
+      return copyOrder(findOrder(order.id));
+    },
     getOrders: () => orders.map(copyOrder),
     getOrder: (orderId: string) => copyOrder(findOrder(orderId)),
     checkBarcode(orderId: string, itemId: string, barcode: string) {
       const { order, item } = requireCurrentItem(orderId, itemId);
       item.barcodeChecked = false;
       item.codbarra = null;
+      if (!item.barcode) {
+        throw new DispatchError(
+          "El artículo no tiene referencia de código de barras. Completa refbarra en el backend antes de escanear.",
+          422,
+          order,
+        );
+      }
       if (barcode.trim() !== item.barcode) {
         throw new DispatchError(
           `Código incorrecto. Debes escanear el artículo: ${item.name}.`,
@@ -275,7 +307,9 @@ export function createDispatchStore(seeds: DemoOrder[]) {
       if (!serial) throw new DispatchError("Escanea o escribe un serial.", 422, order);
       if (
         orders.some((entry) =>
-          entry.items.some((line) => line.serials.includes(serial)),
+          entry.items.some((line) =>
+            line.serials.some((captured) => captured.trim().toUpperCase() === serial),
+          ),
         )
       ) {
         throw new DispatchError(
@@ -298,16 +332,6 @@ export function createDispatchStore(seeds: DemoOrder[]) {
       order.conformado = "Finalizado";
       order.fecfinal = order.completedAt;
       return copyOrder(order);
-    },
-    getDemoCode(order: DispatchOrder) {
-      const item = getCurrentItem(order);
-      if (!item) return null;
-      if (!item.barcodeChecked) return item.barcode;
-      return (
-        expectedSerials(order.id, item.id).find(
-          (serial) => !item.serials.includes(serial),
-        ) ?? `DEMO-${item.id}`
-      );
     },
   };
 }

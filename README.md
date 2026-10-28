@@ -148,11 +148,36 @@ son valores capturados que se conservan cuando vienen informados. Los textos
 `"string"` de un ejemplo Swagger no se sustituyen ni se interpretan como `null`;
 el backend debe enviar `null` para campos sin captura.
 
-**Backend real: solo lectura.** El contrato recibido no define endpoints de
-validación, guardado ni confirmación. Por decisión de integración, al configurar
-`EXPO_PUBLIC_API_URL` se ocultan el escáner, los códigos de prueba y la confirmación.
-El servicio también bloquea esas acciones antes de enviar peticiones: no se usan
-las rutas POST demo contra el backend ni se simula un guardado exitoso.
+### Captura local con el backend real
+
+Al configurar `EXPO_PUBLIC_API_URL`, la app consulta los datos reales y permite
+**capturarlos localmente**, sin enviar escrituras al backend:
+
+- Se debe escanear primero el código de barras, que se compara con `refbarra`.
+  Si `manjser` es `true`, se solicita un serial para esa fila. Un `codbarra`
+  recibido del backend no autoriza por sí solo un nuevo intento de serial.
+- El lector tipo teclado debe enviar **Enter** para capturar; también se puede
+  usar el botón de validación. La cámara es opcional: se abre para leer un código
+  y se cierra después de cada lectura, para no capturar el código de barras como
+  serial mientras sigue apuntando al mismo artículo.
+- Una captura válida llena `codbarra` o `serial1` y `horacapture` en el borrador
+  del detalle. Los seriales se recortan y convierten a mayúsculas, igual que en
+  la demo. Se respetan la secuencia del array y un código de barras por intento
+  de serial; se rechazan valores vacíos y seriales duplicados en las órdenes
+  cargadas durante esta sesión, incluidos los capturados previamente por la API.
+- Los borradores permanecen en memoria al volver a una orden durante la sesión.
+  **Se pierden al recargar o cerrar la app**; no hay almacenamiento persistente.
+  `getDispatchOrderItems` sigue devolviendo la respuesta del servidor, mientras
+  `getDispatchOrder` devuelve el detalle con su borrador local si ya está cargado.
+- La pantalla avisa que las capturas no se han enviado. La lista conserva el
+  estado del servidor y no presenta el borrador como un despacho finalizado.
+  Las órdenes finalizadas no admiten escaneo; si no hay ítems, no se puede confirmar.
+
+El contrato recibido no define endpoints de validación, guardado ni confirmación.
+El serial se comprueba solo localmente, no contra el backend. La confirmación
+permanece bloqueada en el servicio y oculta en la UI; tampoco se muestran códigos
+de prueba en modo real. No se utilizan las rutas POST demo contra el backend ni
+se simula un guardado exitoso.
 
 Sin `EXPO_PUBLIC_API_URL` se conserva el modo demo con captura y confirmación
 locales. Para habilitar escritura real más adelante será necesario definir los

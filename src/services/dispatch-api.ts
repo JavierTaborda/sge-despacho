@@ -3,7 +3,11 @@ import { AxiosError, AxiosHeaders, create, isAxiosError } from "axios";
 
 import { demoOrders } from "../data/demo-orders.ts";
 import type { DispatchItem, DispatchOrder } from "../domain/dispatch.ts";
-import { createDispatchStore, DispatchError } from "../domain/dispatch.ts";
+import {
+  createDispatchCaptureStore,
+  createDispatchStore,
+  DispatchError,
+} from "../domain/dispatch.ts";
 import {
   getBackendOrderId,
   mapBackendDispatchDetail,
@@ -175,11 +179,12 @@ export function normalizeBackendUrl(value: string) {
 }
 
 export const backendReadOnlyMessage =
-  "Backend en modo de solo lectura. El contrato disponible no incluye endpoints para guardar capturas ni confirmar despachos.";
+  "No se puede confirmar el despacho: las capturas son locales y la API todavía no incluye endpoints para guardarlas ni finalizar.";
 
 export function createDispatchClient(backendUrl?: string, adapter?: AxiosAdapter) {
   const configuredUrl = backendUrl?.trim();
   const isBackendMode = !!configuredUrl;
+  const localCaptures = createDispatchCaptureStore();
   const api = create({
     baseURL: configuredUrl ? normalizeBackendUrl(configuredUrl) : "https://demo.sge.invalid",
     timeout: 15_000,
@@ -219,15 +224,16 @@ export function createDispatchClient(backendUrl?: string, adapter?: AxiosAdapter
         return data.order;
       }
       const params = parseBackendOrderId(orderId);
+      if (localCaptures.hasOrder(orderId)) return localCaptures.getOrder(orderId);
       const path = `/api/dispatch/orders/${params.prednum}/${params.pednum}`;
       const [header, items] = await Promise.all([
         api.get<unknown>(path),
         getDispatchOrderItems(orderId),
       ]);
-      return mapBackendDispatchDetail(header.data, params, items);
+      return localCaptures.registerOrder(mapBackendDispatchDetail(header.data, params, items));
     },
     async checkBarcode(orderId: string, itemId: string, code: string) {
-      requireWritableBackend();
+      if (isBackendMode) return localCaptures.checkBarcode(orderId, itemId, code);
       const { data } = await api.post<{
         valid: boolean;
         serial: boolean;
@@ -236,7 +242,7 @@ export function createDispatchClient(backendUrl?: string, adapter?: AxiosAdapter
       return data;
     },
     async checkSerial(orderId: string, itemId: string, code: string) {
-      requireWritableBackend();
+      if (isBackendMode) return localCaptures.checkSerial(orderId, itemId, code);
       const { data } = await api.post<{ valid: boolean; order: DispatchOrder }>(
         "/check-serial",
         { orderId, itemId, code },
