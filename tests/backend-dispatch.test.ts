@@ -1,35 +1,35 @@
 /// <reference types="node" />
 
-import { AxiosError, AxiosHeaders } from "axios";
 import type { AxiosAdapter } from "axios";
+import { AxiosError, AxiosHeaders } from "axios";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { test } from "node:test";
 
 import {
-  DispatchError,
-  getCurrentItem,
-  getOrderProgress,
-  getOrderStatus,
-  isItemComplete,
-  isOrderComplete,
+    DispatchError,
+    getCurrentItem,
+    getOrderProgress,
+    getOrderStatus,
+    isItemComplete,
+    isOrderComplete,
 } from "../src/domain/dispatch.ts";
 import {
-  getBackendOrderId,
-  mapBackendDispatchDetail,
-  mapBackendDispatchPayload,
-  parseBackendDispatchOrders,
-  parseBackendDispatchItems,
-  parseBackendOrderId,
-  type BackendDispatchItem,
-  type BackendDispatchOrder,
+    getBackendOrderId,
+    mapBackendDispatchDetail,
+    mapBackendDispatchPayload,
+    parseBackendDispatchItems,
+    parseBackendDispatchOrders,
+    parseBackendOrderId,
+    type BackendDispatchItem,
+    type BackendDispatchOrder,
 } from "../src/services/backend-dispatch.ts";
 import {
-  createDispatchClient,
-  getErrorMessage,
-  getErrorOrder,
-  normalizeBackendUrl,
+    createDispatchClient,
+    getErrorMessage,
+    getErrorOrder,
+    normalizeBackendUrl,
 } from "../src/services/dispatch-api.ts";
 
 const header: BackendDispatchOrder = {
@@ -191,6 +191,40 @@ test("item endpoint accepts the exact shared array and sends Accept application/
   assert.equal(mapped.objectstate, "None");
   assert.equal(mapped.objecticon, "sap-icon://None");
   assert.equal(mapped.objectstate2, "Warning");
+});
+
+test("submits the complete predispatch payload with captured barcode and serial", async () => {
+  let submitted: unknown;
+  const basePath = `/api/dispatch/orders/${header.prednum}/${header.pednum}`;
+  const adapter: AxiosAdapter = async (config) => {
+    if (config.method === "get" && config.url === basePath) {
+      return { data: header, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+    }
+    if (config.method === "get" && config.url === `${basePath}/items`) {
+      return { data: [line], status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+    }
+    if (config.method === "post" && config.url === "/api/dispatch/orders/predispatch") {
+      submitted = JSON.parse(String(config.data));
+      return { data: null, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+    }
+    throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+  };
+  const client = createDispatchClient("https://api.example.test", adapter);
+  const order = await client.getDispatchOrder("6242-19665");
+  const barcodeResult = await client.checkBarcode(order.id, order.items[0].id, line.refbarra!);
+  const serialResult = await client.checkSerial(order.id, order.items[0].id, "SERIAL-001");
+  await client.submitPredispatch(serialResult.order);
+
+  assert.deepEqual(submitted, {
+    ...header,
+    items: [{
+      ...line,
+      codbarra: line.refbarra,
+      serial1: "SERIAL-001",
+      horacapture: serialResult.order.items[0].horacapture,
+    }],
+  });
+  assert.equal(barcodeResult.serial, true);
 });
 
 test("item parser preserves duplicate products as distinct rows, order and null values", () => {
@@ -399,10 +433,8 @@ test("backend blocks confirmation and rejects scans of unloaded orders without H
     return { data: [], status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
   };
   const client = createDispatchClient("https://api.example.test/api", adapter);
-  assert.equal(client.isBackendMode, true);
-  assert.equal(client.canWriteDispatch, false);
+  assert.equal(typeof client.getDispatchOrders, "function");
   const [order] = mapBackendDispatchPayload([header]);
-  assert.equal(client.getDemoCode(order), null);
   for (const promise of [
     client.checkBarcode(order.id, "1", "123"),
     client.checkSerial(order.id, "1", "SN"),
@@ -411,7 +443,7 @@ test("backend blocks confirmation and rejects scans of unloaded orders without H
       error instanceof DispatchError && error.status === 404);
   }
   await assert.rejects(client.completeDispatch(order.id), (error) =>
-    error instanceof DispatchError && error.status === 405 && /capturas son locales/.test(error.message));
+    error instanceof DispatchError && error.status === 405 && /no incluye un endpoint para finalizar/.test(error.message));
   await assert.rejects(client.getDispatchOrder("6242"), /prednum y pednum/);
   await assert.rejects(client.getDispatchOrderItems("6242"), /prednum y pednum/);
   assert.equal(requests, 0);
@@ -427,8 +459,6 @@ test("backend local scans fill codbarra and serial1 in exact sequence without se
   const order = await client.getDispatchOrder("6242-19665");
   const [first, second, third] = order.items;
   assert.deepEqual(order.items.map((item) => item.itemnum), [7, 2, 9]);
-  assert.equal(client.canWriteDispatch, false);
-  assert.equal(client.getDemoCode(order), null);
   await assert.rejects(client.checkBarcode(order.id, second.id, second.barcode), /saltar/);
   await assert.rejects(client.checkSerial(order.id, first.id, "SN-001"), /Primero/);
   await assert.rejects(client.checkBarcode(order.id, first.id, "OTRO-CODIGO"), /Código incorrecto/);
@@ -473,7 +503,7 @@ test("backend local scans fill codbarra and serial1 in exact sequence without se
   assert.equal(getCurrentItem(last.order), undefined);
   assert.equal(last.order.conformado, "En despacho");
   assert.equal(last.order.fecfinal, null);
-  await assert.rejects(client.completeDispatch(order.id), /capturas son locales/);
+  await assert.rejects(client.completeDispatch(order.id), /no incluye un endpoint para finalizar/);
   assert.equal((await client.getDispatchOrders())[0].conformado, "En despacho");
   assert.equal((await client.getDispatchOrderItems(order.id))[0].serial1, null);
   assert.equal(payload[0].serial1, null);
@@ -585,27 +615,6 @@ test("surfaces API message bodies for HTTP errors", () => {
   assert.equal(getErrorMessage(error), "Sesión vencida");
 });
 
-test("unset backend configuration preserves the working demo and its write capabilities", async () => {
-  const client = createDispatchClient("  ");
-  assert.equal(client.isBackendMode, false);
-  assert.equal(client.canWriteDispatch, true);
-  const orders = await client.getDispatchOrders();
-  assert.equal(orders.length, 2);
-  assert.equal(orders[0].cantdesp, 9);
-  assert.equal("items" in orders[0], false);
-  const detail = await client.getDispatchOrder(getBackendOrderId(orders[0]));
-  assert.equal(detail.itemsLoaded, true);
-  assert.equal(detail.items.length, 9);
-  assert.ok(client.getDemoCode(detail));
-  const items = await client.getDispatchOrderItems(getBackendOrderId(orders[0]));
-  assert.equal(items.length, 9);
-  assert.equal(items[0].itemnum, 1);
-  assert.equal(items[0].compuesto, 0);
-  assert.equal(items[0].Articulo, detail.items[0].name);
-  assert.equal(items[0].refbarra, detail.items[0].barcode);
-  assert.equal(items[0].codbarra, null);
-  assert.equal(items[0].serial1, null);
-  assert.equal("quantity" in items[0], false);
-  assert.equal("requiresSerial" in items[0], false);
-  await assert.rejects(client.getDispatchOrderItems("9999-9999"), /No encontramos/);
+test("backend URL is required for data requests", async () => {
+  await assert.rejects(createDispatchClient("  ").getDispatchOrders(), /EXPO_PUBLIC_API_URL/);
 });

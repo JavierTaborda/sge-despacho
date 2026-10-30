@@ -25,16 +25,12 @@ import {
 } from "@/domain/dispatch";
 import { useBarcodeScanner } from "@/hooks/use-barcode-scanner";
 import {
-  backendReadOnlyMessage,
-  canWriteDispatch,
   checkBarcode,
   checkSerial,
-  completeDispatch,
-  getDemoCode,
   getDispatchOrder,
   getErrorMessage,
   getErrorOrder,
-  isBackendMode,
+  submitPredispatch,
 } from "@/services/dispatch-api";
 
 export default function DispatchRoute() {
@@ -53,6 +49,7 @@ function DispatchScreen({ id }: { id: string }) {
     "idle" | "success" | "error"
   >("idle");
   const [retry, setRetry] = useState(0);
+  const [predispatchSent, setPredispatchSent] = useState(false);
   const inputRef = useRef<TextInputInstance>(null);
   const refocusAfterScan = useRef(false);
   const requestInFlight = useRef(false);
@@ -121,8 +118,6 @@ function DispatchScreen({ id }: { id: string }) {
     : { checked: 0, total: 0, percent: 0 };
   const itemIndex =
     order?.items.findIndex((line) => line.id === item?.id) ?? -1;
-  const demoCode = order && item ? getDemoCode(order) : null;
-
   async function submitScan(value: string) {
     if (requestInFlight.current || !order || !item) return;
     if (!value.trim() && !serialMode) {
@@ -149,7 +144,7 @@ function DispatchScreen({ id }: { id: string }) {
           (line) => line.id === item.id,
         );
         setFeedback(
-          `${isBackendMode ? "Captura local, sin enviar al backend. " : ""}${
+          `Captura local, sin enviar al backend. ${
             updatedItem && isItemComplete(updatedItem)
               ? `${item.name}: todas las unidades verificadas.`
               : `Serial registrado. ${updatedItem?.serials.length ?? 0} de ${item.quantity} unidades verificadas. Escanea nuevamente el código de barras para la siguiente unidad.`
@@ -201,19 +196,15 @@ function DispatchScreen({ id }: { id: string }) {
   });
 
   async function confirmDispatch() {
-    if (!canWriteDispatch) {
-      setError(backendReadOnlyMessage);
-      return;
-    }
     if (!order || requestInFlight.current) return;
     requestInFlight.current = true;
     setBusy(true);
     setError("");
     try {
-      const completed = await completeDispatch(order.id);
+      await submitPredispatch(order);
       if (mounted.current) {
-        setOrder(completed);
-        setFeedback("");
+        setPredispatchSent(true);
+        setFeedback("Orden predespachada enviada correctamente.");
       }
     } catch (reason) {
       if (mounted.current) setError(getErrorMessage(reason));
@@ -249,11 +240,9 @@ function DispatchScreen({ id }: { id: string }) {
               <Icon name="arrow-back" size={22} />
             </Pressable>
             <Text className="flex-1 text-[15px] font-bold text-ink">
-              {isBackendMode
-                ? "Captura local de despacho"
-                : orderCompleted
-                  ? "Comprobante de despacho"
-                  : "Preparar despacho"}
+              {orderCompleted
+                ? "Comprobante de despacho"
+                : "Captura local de despacho"}
             </Text>
             <View className="h-9 w-9 items-center justify-center">
               <Icon
@@ -317,19 +306,6 @@ function DispatchScreen({ id }: { id: string }) {
                 <ProgressBar percent={progress.percent} />
               </View>
 
-              {isBackendMode && !orderCompleted && (
-                <View className="gap-2 rounded-[18px] border border-line bg-primary-light p-4">
-                  <Text className="text-[13px] font-bold text-primary-dark">
-                    Captura local · Sin enviar al backend
-                  </Text>
-                  <Text className="text-[12px] leading-5 text-ink">
-                    Escanea el código de barras y después el serial. Las
-                    capturas permanecen al volver a esta orden durante la
-                    sesión, pero se pierden al recargar o cerrar la app.
-                  </Text>
-                </View>
-              )}
-
               {orderCompleted ? (
                 <View className="gap-4 rounded-3xl border border-success-border bg-surface p-6">
                   <View className="h-[78px] w-[78px] items-center justify-center self-center rounded-full bg-secondary-light">
@@ -343,20 +319,14 @@ function DispatchScreen({ id }: { id: string }) {
                     ¡Despacho listo!
                   </Text>
                   <Text className="text-center text-[13px] leading-5 text-muted">
-                    {isBackendMode
-                      ? "El backend informa que esta orden está finalizada."
-                      : "Cada artículo verificado. Cada serial en su lugar."}
+                    El backend informa que esta orden está finalizada.
                   </Text>
                   <View className="my-[5px] items-center gap-[7px] border-y border-dashed border-line py-5">
                     <Text className="text-[9px] font-semibold tracking-[1.5px] text-muted">
-                      {isBackendMode
-                        ? "ESTADO DEL BACKEND: FINALIZADO"
-                        : "CONFIRMACIÓN DEMO"}
+                      ESTADO DEL BACKEND: FINALIZADO
                     </Text>
                     <Text className="text-[18px] font-bold text-ink">
-                      {isBackendMode
-                        ? `Despacho ${order.prednum} · Pedido ${order.pednum}`
-                        : `SGE-${order.id}`}
+                      Despacho {order.prednum} · Pedido {order.pednum}
                     </Text>
                     <Text className="text-[11px] text-muted">
                       {order.fecfinalStr ||
@@ -417,7 +387,7 @@ function DispatchScreen({ id }: { id: string }) {
                     {item.name}
                   </Text>
                   <Text className="-mt-2 text-[12px] text-muted">
-                    SKU {item.sku} · {item.quantity}{" "}
+                    {item.sku} · {item.quantity}{" "}
                     {item.quantity === 1 ? "unidad" : "unidades"}
                   </Text>
                   {/* 
@@ -629,9 +599,7 @@ function DispatchScreen({ id }: { id: string }) {
                       busy
                         ? "Validando…"
                         : serialMode
-                          ? isBackendMode
-                            ? "Capturar serial"
-                            : "Validar serial"
+                          ? "Capturar serial"
                           : "Validar código"
                     }
                     icon="scan-outline"
@@ -641,48 +609,6 @@ function DispatchScreen({ id }: { id: string }) {
                       void submitScan(code);
                     }}
                   />
-                  {demoCode && (
-                    <View className="mt-px gap-[9px] rounded-[14px] bg-background p-[13px]">
-                      <View className="flex-row items-center justify-between gap-2">
-                        <Text className="text-[9px] font-bold tracking-[0.7px] text-muted">
-                          PRUEBA SIN LECTOR
-                        </Text>
-                        <Badge>DEMO</Badge>
-                      </View>
-                      <Text
-                        selectable
-                        className="text-[13px] font-semibold text-ink"
-                        style={typography.numeric}
-                      >
-                        {demoCode}
-                      </Text>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Usar código de prueba"
-                        disabled={busy || !demoCode}
-                        onPress={() => {
-                          if (demoCode) void submitScan(demoCode);
-                        }}
-                        className={`min-h-[40px] flex-row items-center gap-1.5 active:opacity-50 ${
-                          busy ? "opacity-50" : ""
-                        }`}
-                      >
-                        <Icon
-                          name="flash-outline"
-                          size={16}
-                          color={colors.primaryDark}
-                        />
-                        <Text className="flex-1 text-[12px] font-bold text-primary-dark">
-                          Usar código de prueba
-                        </Text>
-                        <Icon
-                          name="arrow-forward"
-                          size={16}
-                          color={colors.primaryDark}
-                        />
-                      </Pressable>
-                    </View>
-                  )}
                 </Animated.View>
               ) : order.items.length ? (
                 <View className="gap-4 rounded-[22px] border border-success-border bg-surface p-[22px]">
@@ -693,19 +619,19 @@ function DispatchScreen({ id }: { id: string }) {
                       size={26}
                     />
                     <Text className="text-[20px] font-bold text-ink">
-                      {isBackendMode
-                        ? "Captura local completa"
-                        : "Todo verificado"}
+                      {predispatchSent
+                        ? "Predespacho enviado"
+                        : "Captura local completa"}
                     </Text>
                   </View>
                   <Text className="text-[13px] leading-[21px] text-muted">
-                    {isBackendMode
-                      ? "Completaste la captura en esta sesión. Los seriales no se han enviado al backend y el despacho sigue sin finalizar."
-                      : "Completaste todos los artículos en el orden correcto. Confirma para finalizar el despacho."}
+                    {predispatchSent
+                      ? "Las capturas de esta orden se enviaron al backend. El despacho continúa en proceso."
+                      : "Completaste la captura en esta sesión. Envía los códigos y seriales para registrar el predespacho."}
                   </Text>
-                  {canWriteDispatch ? (
+                  {!predispatchSent ? (
                     <Button
-                      title="Confirmar despacho"
+                      title="Enviar predespacho"
                       icon="checkmark-done-outline"
                       loading={busy}
                       onPress={() => {
@@ -825,7 +751,7 @@ function DispatchScreen({ id }: { id: string }) {
                             Código capturado: {line.codbarra}
                           </Text>
                         )}
-                        {!!line.lectura && isBackendMode && (
+                        {!!line.lectura && (
                           <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
                             Lectura del backend: {line.lectura}
                           </Text>
@@ -839,7 +765,7 @@ function DispatchScreen({ id }: { id: string }) {
                             Serial: {serial}
                           </Text>
                         ))}
-                        {isBackendMode && !!line.horacapture && (
+                        {!!line.horacapture && (
                           <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
                             Captura: {line.horacapture} · Usuario:{" "}
                             {line.recouser}
@@ -862,9 +788,8 @@ function DispatchScreen({ id }: { id: string }) {
                 })}
               </View>
               <Text className="text-center text-[9px] leading-4 text-muted">
-                {isBackendMode
-                  ? "Backend real · Solo consulta · No se envían capturas ni confirmaciones"
-                  : "Entorno de prueba · Datos simulados · Sin conexión a un backend real"}
+                Backend conectado · Las capturas se envían al confirmar el
+                predespacho.
               </Text>
             </ScrollView>
           )}

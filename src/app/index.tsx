@@ -13,8 +13,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Badge, Button, Icon, Notice } from "@/components/ui";
 import { colors, shadows } from "@/constants/theme";
 import { useDispatchOrders } from "@/hooks/use-dispatch-orders";
-import { getBackendOrderId, type BackendDispatchOrder } from "@/services/backend-dispatch";
-import { isBackendMode } from "@/services/dispatch-api";
+import {
+    getBackendOrderId,
+    type BackendDispatchOrder,
+} from "@/services/backend-dispatch";
 
 function OrderCard({ order }: { order: BackendDispatchOrder }) {
   const completed = order.conformado === "Finalizado";
@@ -25,10 +27,13 @@ function OrderCard({ order }: { order: BackendDispatchOrder }) {
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`Predespacho ${order.prednum}, pedido ${order.pednum}, ${customer}, ${order.conformado}, cantidad ${order.cantdesp}. ${
-        completed ? "Ver detalle" : isBackendMode ? "Escanear localmente" : "Preparar orden"
+        completed ? "Ver detalle" : "Escanear orden"
       }`}
       onPress={() =>
-        router.push({ pathname: "/despacho/[id]", params: { id: getBackendOrderId(order) } })
+        router.push({
+          pathname: "/despacho/[id]",
+          params: { id: getBackendOrderId(order) },
+        })
       }
       className="mb-3.5 rounded-[22px] border border-line bg-surface p-[19px] active:opacity-80"
       style={shadows.card}
@@ -58,7 +63,9 @@ function OrderCard({ order }: { order: BackendDispatchOrder }) {
       <Text className="mb-2 mt-1 text-[18px] font-bold tracking-[-0.4px] text-ink">
         {customer}
       </Text>
-      <Text className="mb-2 text-[10px] text-muted">Cliente {order.co_cli}</Text>
+      <Text className="mb-2 text-[10px] text-muted">
+        Cliente {order.co_cli}
+      </Text>
 
       <View className="mb-1 flex-row flex-wrap gap-x-4 gap-y-1.5">
         <View className="flex-row items-center gap-[5px]">
@@ -84,8 +91,16 @@ function OrderCard({ order }: { order: BackendDispatchOrder }) {
           <Text className="text-[11px] text-muted">{order.fecdesp}</Text>
         </View>
       </View>
-      {!!order.duracion && <Text className="mt-2 text-[11px] text-muted">Duración: {order.duracion}</Text>}
-      {!!order.supervisor && <Text className="mt-2 text-[11px] text-muted">Supervisor: {order.supervisor}</Text>}
+      {!!order.duracion && (
+        <Text className="mt-2 text-[11px] text-muted">
+          Duración: {order.duracion}
+        </Text>
+      )}
+      {!!order.supervisor && (
+        <Text className="mt-2 text-[11px] text-muted">
+          Supervisor: {order.supervisor}
+        </Text>
+      )}
       {completed && !!(order.fecfinalStr || order.fecfinal) && (
         <Text className="mt-2 text-[11px] text-muted">
           Finalizado: {order.fecfinalStr || order.fecfinal}
@@ -104,9 +119,7 @@ function OrderCard({ order }: { order: BackendDispatchOrder }) {
         </View>
         <View className="flex-row items-center gap-[5px]">
           <Text className="text-[12px] font-bold text-primary">
-            {completed
-              ? "Ver detalle"
-              : isBackendMode ? "Escanear" : "Preparar"}
+            {completed ? "Ver detalle" : "Escanear"}
           </Text>
           <Icon name="arrow-forward" size={18} color={colors.primary} />
         </View>
@@ -196,7 +209,8 @@ export default function Index() {
                       size={16}
                     />
                     <Text className="text-[11px] text-inverse-text">
-                      {completed} {completed === 1 ? "finalizada" : "finalizadas"}
+                      {completed}{" "}
+                      {completed === 1 ? "finalizada" : "finalizadas"}
                     </Text>
                   </View>
                 </View>

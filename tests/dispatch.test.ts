@@ -1,76 +1,113 @@
 /// <reference types="node" />
 
-import { create, isAxiosError } from "axios";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { demoOrders } from "../src/data/demo-orders.ts";
 import {
-  createDispatchStore,
-  DispatchError,
-  getCurrentItem,
-  getOrderProgress,
-  getOrderStatus,
-  isItemComplete,
-  type DemoOrder,
+    createDispatchCaptureStore,
+    DispatchError,
+    getCurrentItem,
+    getOrderProgress,
+    getOrderStatus,
+    isItemComplete,
+    type DispatchItem,
+    type DispatchOrder,
 } from "../src/domain/dispatch.ts";
-import { createMockAdapter } from "../src/services/dispatch-api.ts";
 
-const serializedSeed = demoOrders[0].items[0];
-const testOrder: DemoOrder = {
-  ...demoOrders[0],
+function makeTestItem(item: {
+  id: string;
+  itemnum: number;
+  name: string;
+  sku: string;
+  barcode: string;
+  quantity: number;
+  requiresSerial: boolean;
+}): DispatchItem {
+  return {
+    prednum: 1048,
+    pednum: 19665,
+    rennum: item.itemnum,
+    codart: item.sku,
+    artdes: item.name,
+    Articulo: item.name,
+    compuesto: 0,
+    manjser: item.requiresSerial,
+    codalma: "0001",
+    codbarra: null,
+    serial1: null,
+    refbarra: item.barcode,
+    recouser: "1",
+    supervisor: null,
+    horacapture: null,
+    changed: false,
+    selected: false,
+    objectstate: "None",
+    objecticon: "sap-icon://None",
+    lectura: item.requiresSerial ? null : "Sin serial",
+    objectstate2: "Warning",
+    ...item,
+    location: "0001",
+    barcodeChecked: false,
+    serials: [],
+  };
+}
+
+const testOrder: DispatchOrder = {
+  prednum: 1048,
+  pednum: 19665,
+  profite: false,
+  estatus: 0,
+  fecemis: "",
+  fecdesp: "2026-10-23 09:32:56",
+  fecfinal: null,
+  horainicio: null,
+  horafinal: null,
+  codcli: "00734",
+  codzon: "0002",
+  codven: "00004",
+  cantped: 3,
+  cantreng: 3,
+  cantdesp: 0,
+  cantcarga: 0,
+  totneto: 0,
+  parcial: false,
+  compuesto: false,
+  codtrans: null,
+  codchofer: 0,
+  placa: null,
+  cerrado: false,
+  anulado: false,
+  proceso: false,
+  comentario: null,
+  owneruser: "1",
   id: "OD-1048",
+  customer: "Cliente de prueba",
+  address: "TACHIRA",
+  scheduledAt: "2026-10-23 09:32:56",
   items: [
-    {
-      ...serializedSeed,
-      id: "item-1",
-      name: "Aire de ventana",
-      sku: "AVFR-8W",
-      barcode: "7801234567012",
-      quantity: 2,
-      requiresSerial: true,
-      expectedSerials: ["MSV2200-24081", "MSV2200-24082"],
-    },
-    {
-      ...serializedSeed,
-      id: "item-2",
-      name: "Sensor de temperatura",
-      sku: "ST-100",
-      barcode: "7801234567029",
-      quantity: 2,
-      requiresSerial: false,
-      expectedSerials: [],
-    },
-    {
-      ...serializedSeed,
-      id: "item-3",
-      name: "Oxímetro de pulso",
-      sku: "OP-50",
-      barcode: "7801234567050",
-      quantity: 1,
-      requiresSerial: true,
-      expectedSerials: ["OP50-88301"],
-    },
+    makeTestItem({ id: "item-1", itemnum: 1, name: "Aire de ventana", sku: "AVFR-8W", barcode: "7801234567012", quantity: 2, requiresSerial: true }),
+    makeTestItem({ id: "item-2", itemnum: 2, name: "Sensor de temperatura", sku: "ST-100", barcode: "7801234567029", quantity: 2, requiresSerial: false }),
+    makeTestItem({ id: "item-3", itemnum: 3, name: "Oxímetro de pulso", sku: "OP-50", barcode: "7801234567050", quantity: 1, requiresSerial: true }),
   ],
+  completedAt: null,
+  vendedor: "Vendedor de prueba",
+  supervisor: "supervisor",
+  conformado: "En despacho",
+  fecfinalStr: null,
+  duracion: null,
+  itemsLoaded: true,
 };
 
 function setup() {
-  return createDispatchStore([testOrder]);
+  return createDispatchCaptureStore([testOrder]);
 }
 
-test("loads the two provided dispatches and protects mutable store state", () => {
-  assert.deepEqual(demoOrders.map((order) => order.id), ["6242", "6243"]);
-  assert.equal(demoOrders[0].pednum, 19665);
-  assert.equal(demoOrders[0].items.length, 9);
-  assert.equal(demoOrders[1].pednum, 19641);
-  assert.equal(demoOrders[1].items.length, 14);
-
+test("capture store protects mutable order state", () => {
   const store = setup();
   const orders = store.getOrders();
   assert.equal(orders.length, 1);
   assert.equal(getOrderStatus(orders[0]), "pending");
   assert.deepEqual(getOrderProgress(orders[0]), { checked: 0, total: 5, percent: 0 });
-  assert.equal("expectedSerials" in orders[0].items[0], false);
   assert.equal(orders[0].items[0].refbarra, "7801234567012");
   assert.equal(orders[0].items[0].codbarra, null);
   orders[0].items[0].barcodeChecked = true;
@@ -91,7 +128,6 @@ test("rejects skipping lines and scanning serials before the barcode", () => {
   const store = setup();
   assert.throws(() => store.checkBarcode("OD-1048", "item-2", "7801234567029"), /saltar/);
   assert.throws(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24081"), /Primero/);
-  assert.throws(() => store.completeOrder("OD-1048"), /todos/);
 });
 
 test("serial: true requires a fresh barcode for each unit and accepts any serial", () => {
@@ -138,7 +174,6 @@ test("serial: false completes all quantities of the line and advances automatica
   assert.deepEqual(response.order.items[1].serials, []);
   assert.equal(getOrderProgress(response.order).checked, 4);
   assert.equal(getCurrentItem(response.order)?.id, "item-3");
-  assert.throws(() => store.completeOrder("OD-1048"), /todos/);
 });
 
 test("empty and duplicate serials consume the barcode authorization", () => {
@@ -193,45 +228,21 @@ test("a different product barcode revokes authorization without advancing the or
   );
 });
 
-test("demo suggestions alternate barcode and serial for units of the same product", () => {
+test("full sequential capture does not mark the backend order finalized", () => {
   const store = setup();
-  const codes: string[] = [];
-  for (let scan = 0; scan < 4; scan += 1) {
-    const order = store.getOrder("OD-1048");
+  while (getCurrentItem(store.getOrder(testOrder.id))) {
+    const order = store.getOrder(testOrder.id);
     const item = getCurrentItem(order)!;
-    const code = store.getDemoCode(order)!;
-    codes.push(code);
-    if (item.barcodeChecked) store.checkSerial(order.id, item.id, code);
-    else store.checkBarcode(order.id, item.id, code);
-  }
-  assert.deepEqual(codes, [
-    "7801234567012", "MSV2200-24081",
-    "7801234567012", "MSV2200-24082",
-  ]);
-  assert.equal(getCurrentItem(store.getOrder("OD-1048"))?.id, "item-2");
-});
-
-test("full sequential flow, confirmation, idempotence, and completed order protection", () => {
-  const store = setup();
-  for (const seed of [testOrder]) {
-    while (getCurrentItem(store.getOrder(seed.id))) {
-      const order = store.getOrder(seed.id);
-      const item = getCurrentItem(order)!;
-      const code = store.getDemoCode(order)!;
-      if (item.barcodeChecked) store.checkSerial(order.id, item.id, code);
-      else store.checkBarcode(order.id, item.id, code);
+    if (item.requiresSerial && item.barcodeChecked) {
+      store.checkSerial(order.id, item.id, `SN-${item.itemnum}-${item.serials.length + 1}`);
+    } else {
+      store.checkBarcode(order.id, item.id, item.barcode);
     }
-    assert.equal(store.getDemoCode(store.getOrder(seed.id)), null);
-    assert.equal(getOrderProgress(store.getOrder(seed.id)).percent, 100);
-    assert.equal(getOrderStatus(store.getOrder(seed.id)), "in_progress");
-    const complete = store.completeOrder(seed.id);
-    assert.equal(getOrderStatus(complete), "completed");
-    assert.ok(complete.completedAt);
-    assert.equal(store.completeOrder(seed.id).completedAt, complete.completedAt);
-    assert.throws(() => store.checkBarcode(seed.id, seed.items[0].id, seed.items[0].barcode), /ya fue despachada/);
-    assert.throws(() => store.checkSerial(seed.id, seed.items[0].id, "ANY"), /ya fue despachada/);
   }
-  assert.equal(store.getOrders().filter((order) => order.completedAt).length, 1);
+  const captured = store.getOrder(testOrder.id);
+  assert.equal(getOrderProgress(captured).percent, 100);
+  assert.equal(getOrderStatus(captured), "in_progress");
+  assert.equal(captured.conformado, "En despacho");
 });
 
 test("unknown orders return an explicit 404", () => {
@@ -242,54 +253,12 @@ test("unknown orders return an explicit 404", () => {
   );
 });
 
-test("Axios mock handles real JSON-transformed requests and error responses", async () => {
-  const store = setup();
-  const api = create({ adapter: createMockAdapter(store, 0) });
-  const list = await api.get("/api/dispatch/orders");
-  assert.equal(list.status, 200);
-  assert.equal(list.data.length, 1);
-  assert.equal(list.data[0].conformado, "En despacho");
-  assert.equal(list.data[0].cantdesp, 5);
-  assert.equal("items" in list.data[0], false);
-  const detail = await api.get("/ordenes-despacho/OD-1048");
-  assert.equal(detail.data.order.id, "OD-1048");
-  const scan = await api.post("/check-codigo-barra", {
-    orderId: "OD-1048", itemId: "item-1", code: "7801234567012",
-  });
-  assert.equal(scan.data.serial, true);
-  const arbitrarySerial = await api.post("/check-serial", {
-    orderId: "OD-1048", itemId: "item-1", code: "WRONG",
-  });
-  assert.equal(arbitrarySerial.data.valid, true);
-  await assert.rejects(
-    api.post("/check-serial", { orderId: "OD-1048", itemId: "item-1", code: "WRONG" }),
-    (error) => isAxiosError(error) && error.response?.status === 409,
-  );
-  await assert.rejects(
-    api.post("/ordenes-despacho/OD-1048/confirmar"),
-    (error) => isAxiosError(error) && error.response?.status === 409,
-  );
-  await assert.rejects(
-    api.get("/missing"),
-    (error) => isAxiosError(error) && error.response?.status === 404,
-  );
-  await assert.rejects(
-    api.post("/check-codigo-barra", { orderId: "OD-1048" }),
-    (error) => isAxiosError(error) && error.response?.status === 400,
-  );
-  await assert.rejects(
-    api.post("/check-codigo-barra", "{invalid-json", { transformRequest: [(data) => data] }),
-    (error) => isAxiosError(error) && error.response?.status === 400,
-  );
-});
-
 test("simultaneous requests cannot count the same serial twice", async () => {
   const store = setup();
   store.checkBarcode("OD-1048", "item-1", "7801234567012");
-  const api = create({ adapter: createMockAdapter(store, 0) });
   const results = await Promise.allSettled([
-    api.post("/check-serial", { orderId: "OD-1048", itemId: "item-1", code: "MSV2200-24081" }),
-    api.post("/check-serial", { orderId: "OD-1048", itemId: "item-1", code: "MSV2200-24081" }),
+    Promise.resolve().then(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24081")),
+    Promise.resolve().then(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24081")),
   ]);
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
   assert.equal(results.filter((result) => result.status === "rejected").length, 1);
@@ -300,10 +269,9 @@ test("simultaneous requests cannot count the same serial twice", async () => {
 test("simultaneous different serials cannot share a barcode authorization", async () => {
   const store = setup();
   store.checkBarcode("OD-1048", "item-1", "7801234567012");
-  const api = create({ adapter: createMockAdapter(store, 0) });
   const results = await Promise.allSettled([
-    api.post("/check-serial", { orderId: "OD-1048", itemId: "item-1", code: "MSV2200-24081" }),
-    api.post("/check-serial", { orderId: "OD-1048", itemId: "item-1", code: "MSV2200-24082" }),
+    Promise.resolve().then(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24081")),
+    Promise.resolve().then(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24082")),
   ]);
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
   assert.equal(results.filter((result) => result.status === "rejected").length, 1);

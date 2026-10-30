@@ -86,20 +86,6 @@ export type DispatchOrder = Cbpredes & {
   itemsLoaded: boolean;
 };
 
-export type DemoItem = Omit<DispatchItem, keyof Dtpredes | "barcodeChecked" | "serials"> & {
-  prednum: number;
-  itemnum: number;
-  pednum: number;
-  rennum: number;
-  recouser: string | number;
-  expectedSerials: string[];
-};
-
-export type DemoOrder = Omit<DispatchOrder, keyof Cbpredes | "items" | "completedAt" | "conformado" | "fecfinalStr" | "duracion" | "itemsLoaded"> &
-  Pick<Cbpredes, "pednum" | "codcli" | "codzon" | "codven"> & {
-    items: DemoItem[];
-  };
-
 export class DispatchError extends Error {
   readonly status: number;
   readonly order?: DispatchOrder;
@@ -153,85 +139,6 @@ function copyOrder(order: DispatchOrder): DispatchOrder {
   return {
     ...order,
     items: order.items.map((item) => ({ ...item, serials: [...item.serials] })),
-  };
-}
-
-export function createDispatchStore(seeds: DemoOrder[]) {
-  const orders: DispatchOrder[] = seeds.map((seed) => ({
-    prednum: Number(seed.id.replace(/\D/g, "")) || 0,
-    profite: false,
-    estatus: 0,
-    fecemis: "",
-    fecdesp: seed.scheduledAt,
-    fecfinal: null,
-    horainicio: null,
-    horafinal: null,
-    cantped: seed.items.length,
-    cantreng: seed.items.length,
-    cantdesp: 0,
-    cantcarga: 0,
-    totneto: 0,
-    parcial: false,
-    compuesto: false,
-    codtrans: null,
-    codchofer: 0,
-    placa: null,
-    cerrado: false,
-    anulado: false,
-    proceso: false,
-    comentario: null,
-    owneruser: 1,
-    ...seed,
-    conformado: "En despacho",
-    fecfinalStr: null,
-    duracion: null,
-    itemsLoaded: true,
-    completedAt: null,
-    items: seed.items.map(({ expectedSerials: _, ...item }) => ({
-      ...item,
-      codart: item.sku,
-      artdes: item.name,
-      Articulo: item.name,
-      compuesto: 0,
-      manjser: item.requiresSerial,
-      codalma: item.location,
-      codbarra: null,
-      serial1: null,
-      refbarra: item.barcode,
-      recouser: String(item.recouser),
-      supervisor: seed.supervisor || null,
-      horacapture: null,
-      changed: false,
-      selected: false,
-      objectstate: "None",
-      objecticon: "sap-icon://None",
-      lectura: item.requiresSerial ? null : "Sin serial",
-      objectstate2: "Warning",
-      barcodeChecked: false,
-      serials: [],
-    })),
-  }));
-
-  function expectedSerials(orderId: string, itemId: string) {
-    const item = seeds
-      .find((order) => order.id === orderId)
-      ?.items.find((entry) => entry.id === itemId);
-    if (!item) throw new DispatchError("No encontramos este artículo.", 404);
-    return item.expectedSerials;
-  }
-
-  return {
-    ...createDispatchCaptureStore(orders),
-    getDemoCode(order: DispatchOrder) {
-      const item = getCurrentItem(order);
-      if (!item) return null;
-      if (!item.barcodeChecked) return item.barcode;
-      return (
-        expectedSerials(order.id, item.id).find(
-          (serial) => !item.serials.includes(serial),
-        ) ?? `DEMO-${item.id}`
-      );
-    },
   };
 }
 
@@ -322,16 +229,6 @@ export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) 
       item.serial1 = serial;
       item.horacapture = new Date().toISOString();
       return { valid: true, order: copyOrder(order) };
-    },
-    completeOrder(orderId: string) {
-      const order = findOrder(orderId);
-      if (!order.items.length || !order.items.every(isItemComplete)) {
-        throw new DispatchError("Debes validar todos los artículos y sus seriales.", 409);
-      }
-      order.completedAt ??= new Date().toISOString();
-      order.conformado = "Finalizado";
-      order.fecfinal = order.completedAt;
-      return copyOrder(order);
     },
   };
 }

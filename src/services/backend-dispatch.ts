@@ -1,10 +1,10 @@
-import { DispatchError } from "../domain/dispatch.ts";
 import type {
   DispatchItem,
   DispatchOrder,
   DispatchStatus,
   Dtpredes,
 } from "../domain/dispatch.ts";
+import { DispatchError } from "../domain/dispatch.ts";
 
 export interface BackendDispatchOrder {
   prednum: number;
