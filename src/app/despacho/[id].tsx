@@ -1,36 +1,36 @@
 import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentRef } from "react";
 import {
-  ActivityIndicator,
-  Animated,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-  type TextInputInstance,
+    ActivityIndicator,
+    Animated,
+    KeyboardAvoidingView,
+    Platform,
+    Pressable,
+    ScrollView,
+    Text,
+    TextInput,
+    View,
+    type TextInputInstance,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Badge, Button, Icon, Notice, ProgressBar } from "@/components/ui";
 import { colors, shadows, typography } from "@/constants/theme";
 import {
-  getCurrentItem,
-  getOrderProgress,
-  isItemComplete,
-  isOrderComplete,
-  type DispatchOrder,
+    getCurrentItem,
+    getOrderProgress,
+    isItemComplete,
+    isOrderComplete,
+    type DispatchOrder,
 } from "@/domain/dispatch";
 import { useBarcodeScanner } from "@/hooks/use-barcode-scanner";
 import {
-  checkBarcode,
-  checkSerial,
-  getDispatchOrder,
-  getErrorMessage,
-  getErrorOrder,
-  submitPredispatch,
+    checkBarcode,
+    checkSerial,
+    getDispatchOrder,
+    getErrorMessage,
+    getErrorOrder,
+    submitPredispatch,
 } from "@/services/dispatch-api";
 
 export default function DispatchRoute() {
@@ -50,7 +50,9 @@ function DispatchScreen({ id }: { id: string }) {
   >("idle");
   const [retry, setRetry] = useState(0);
   const [predispatchSent, setPredispatchSent] = useState(false);
+  const [showScrollToTop, setShowScrollToTop] = useState(false);
   const inputRef = useRef<TextInputInstance>(null);
+  const scrollViewRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const refocusAfterScan = useRef(false);
   const requestInFlight = useRef(false);
   const mounted = useRef(true);
@@ -271,126 +273,132 @@ function DispatchScreen({ id }: { id: string }) {
               />
             </View>
           ) : (
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-              contentContainerClassName="gap-[18px] p-6 pb-[35px] pt-1.5"
-            >
-              <View className="gap-2.5 rounded-[20px] border border-line bg-surface px-4 py-3.5">
-                <View className="flex-row items-center gap-3">
-                  <View className="h-11 w-11 items-center justify-center rounded-[15px] bg-primary-light">
-                    <Icon name="scan" size={22} color={colors.primary} />
-                  </View>
-                  <View className="min-w-0 flex-1 gap-0.5">
-                    <View className="flex-row items-center gap-2">
-                      <Text className="text-[15px] font-extrabold text-ink">
-                        {order.prednum} · Pedido {order.pednum}
+            <>
+              <ScrollView
+                ref={scrollViewRef}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                scrollEventThrottle={16}
+                onScroll={(event) => {
+                  setShowScrollToTop(event.nativeEvent.contentOffset.y > 320);
+                }}
+                contentContainerClassName="gap-[18px] p-6 pb-[35px] pt-1.5"
+              >
+                <View className="gap-2.5 rounded-[20px] border border-line bg-surface px-4 py-3.5">
+                  <View className="flex-row items-center gap-3">
+                    <View className="h-11 w-11 items-center justify-center rounded-[15px] bg-primary-light">
+                      <Icon name="scan" size={22} color={colors.primary} />
+                    </View>
+                    <View className="min-w-0 flex-1 gap-0.5">
+                      <View className="flex-row items-center gap-2">
+                        <Text className="text-[15px] font-extrabold text-ink">
+                          {order.prednum} · Pedido {order.pednum}
+                        </Text>
+                      </View>
+                      <Text
+                        numberOfLines={2}
+                        className="text-[12px] font-medium text-muted"
+                      >
+                        {order.customer}
                       </Text>
                     </View>
-                    <Text
-                      numberOfLines={2}
-                      className="text-[12px] font-medium text-muted"
-                    >
-                      {order.customer}
-                    </Text>
+                    <View className="items-end gap-0.5">
+                      <Text className="text-[17px] font-extrabold text-primary">
+                        {progress.percent}%
+                      </Text>
+                      <Text className="text-[9px] font-medium text-muted">
+                        {progress.checked}/{progress.total}
+                      </Text>
+                    </View>
                   </View>
-                  <View className="items-end gap-0.5">
-                    <Text className="text-[17px] font-extrabold text-primary">
-                      {progress.percent}%
-                    </Text>
-                    <Text className="text-[9px] font-medium text-muted">
-                      {progress.checked}/{progress.total}
-                    </Text>
-                  </View>
+                  <ProgressBar percent={progress.percent} />
                 </View>
-                <ProgressBar percent={progress.percent} />
-              </View>
 
-              {orderCompleted ? (
-                <View className="gap-4 rounded-3xl border border-success-border bg-surface p-6">
-                  <View className="h-[78px] w-[78px] items-center justify-center self-center rounded-full bg-secondary-light">
-                    <Icon
-                      name="checkmark-done"
-                      size={42}
-                      color={colors.secondary}
+                {orderCompleted ? (
+                  <View className="gap-4 rounded-3xl border border-success-border bg-surface p-6">
+                    <View className="h-[78px] w-[78px] items-center justify-center self-center rounded-full bg-secondary-light">
+                      <Icon
+                        name="checkmark-done"
+                        size={42}
+                        color={colors.secondary}
+                      />
+                    </View>
+                    <Text className="text-center text-[28px] font-extrabold tracking-[-0.9px] text-ink">
+                      ¡Despacho listo!
+                    </Text>
+                    <Text className="text-center text-[13px] leading-5 text-muted">
+                      El backend informa que esta orden está finalizada.
+                    </Text>
+                    <View className="my-[5px] items-center gap-[7px] border-y border-dashed border-line py-5">
+                      <Text className="text-[9px] font-semibold tracking-[1.5px] text-muted">
+                        ESTADO DEL BACKEND: FINALIZADO
+                      </Text>
+                      <Text className="text-[18px] font-bold text-ink">
+                        Despacho {order.prednum} · Pedido {order.pednum}
+                      </Text>
+                      <Text className="text-[11px] text-muted">
+                        {order.fecfinalStr ||
+                          order.completedAt ||
+                          "Fecha de finalización no informada"}
+                      </Text>
+                      {!!order.duracion && (
+                        <Text className="text-[11px] text-muted">
+                          Duración: {order.duracion}
+                        </Text>
+                      )}
+                    </View>
+                    <Button
+                      title="Volver a mis órdenes"
+                      icon="arrow-forward"
+                      onPress={() => router.replace("/")}
                     />
                   </View>
-                  <Text className="text-center text-[28px] font-extrabold tracking-[-0.9px] text-ink">
-                    ¡Despacho listo!
-                  </Text>
-                  <Text className="text-center text-[13px] leading-5 text-muted">
-                    El backend informa que esta orden está finalizada.
-                  </Text>
-                  <View className="my-[5px] items-center gap-[7px] border-y border-dashed border-line py-5">
-                    <Text className="text-[9px] font-semibold tracking-[1.5px] text-muted">
-                      ESTADO DEL BACKEND: FINALIZADO
-                    </Text>
-                    <Text className="text-[18px] font-bold text-ink">
-                      Despacho {order.prednum} · Pedido {order.pednum}
-                    </Text>
-                    <Text className="text-[11px] text-muted">
-                      {order.fecfinalStr ||
-                        order.completedAt ||
-                        "Fecha de finalización no informada"}
-                    </Text>
-                    {!!order.duracion && (
-                      <Text className="text-[11px] text-muted">
-                        Duración: {order.duracion}
-                      </Text>
-                    )}
-                  </View>
-                  <Button
-                    title="Volver a mis órdenes"
-                    icon="arrow-forward"
-                    onPress={() => router.replace("/")}
-                  />
-                </View>
-              ) : item ? (
-                <Animated.View
-                  className="gap-3.5 rounded-3xl border border-scanner-border bg-surface p-5"
-                  style={[
-                    shadows.scanner,
-                    {
-                      backgroundColor:
-                        validationState === "error"
-                          ? colors.redLight
-                          : validationFlash.interpolate({
-                              inputRange: [0, 1],
-                              outputRange: [
-                                colors.surface,
-                                colors.secondaryLight,
-                              ],
-                            }),
-                      borderColor:
-                        validationState === "error"
-                          ? colors.red
-                          : colors.scannerBorder,
-                    },
-                  ]}
-                >
-                  <View className="flex-row items-center justify-between">
-                    <Badge tone="orange">
-                      ARTÍCULO {itemIndex + 1} DE {order.items.length}
-                    </Badge>
-                    <View className="flex-row items-center gap-[5px]">
-                      <Icon
-                        name="grid-outline"
-                        size={13}
-                        color={colors.muted}
-                      />
-                      <Text className="text-[11px] font-semibold text-muted">
-                        {item.location}
-                      </Text>
+                ) : item ? (
+                  <Animated.View
+                    className="gap-3.5 rounded-3xl border border-scanner-border bg-surface p-5"
+                    style={[
+                      shadows.scanner,
+                      {
+                        backgroundColor:
+                          validationState === "error"
+                            ? colors.redLight
+                            : validationFlash.interpolate({
+                                inputRange: [0, 1],
+                                outputRange: [
+                                  colors.surface,
+                                  colors.secondaryLight,
+                                ],
+                              }),
+                        borderColor:
+                          validationState === "error"
+                            ? colors.red
+                            : colors.scannerBorder,
+                      },
+                    ]}
+                  >
+                    <View className="flex-row items-center justify-between">
+                      <Badge tone="orange">
+                        ARTÍCULO {itemIndex + 1} DE {order.items.length}
+                      </Badge>
+                      <View className="flex-row items-center gap-[5px]">
+                        <Icon
+                          name="grid-outline"
+                          size={13}
+                          color={colors.muted}
+                        />
+                        <Text className="text-[11px] font-semibold text-muted">
+                          {item.location}
+                        </Text>
+                      </View>
                     </View>
-                  </View>
-                  <Text className="mt-px text-[21px] font-bold tracking-[-0.5px] text-ink">
-                    {item.name}
-                  </Text>
-                  <Text className="-mt-2 text-[12px] text-muted">
-                    {item.sku} · {item.quantity}{" "}
-                    {item.quantity === 1 ? "unidad" : "unidades"}
-                  </Text>
-                  {/* 
+                    <Text className="mt-px text-[21px] font-bold tracking-[-0.5px] text-ink">
+                      {item.name}
+                    </Text>
+                    <Text className="-mt-2 text-[12px] text-muted">
+                      {item.sku} · {item.quantity}{" "}
+                      {item.quantity === 1 ? "unidad" : "unidades"}
+                    </Text>
+                    {/* 
                   <View className="flex-row items-center gap-2 py-[9px]">
                     <View className="flex-row items-center gap-1.5">
                       <View
@@ -523,275 +531,291 @@ function DispatchScreen({ id }: { id: string }) {
                     La cámara captura un código y se cierra. Ábrela de nuevo
                     para escanear el siguiente código o serial.
                   </Text>*/}
-                  {!!camera.error && <Notice message={camera.error} />}
+                    {!!camera.error && <Notice message={camera.error} />}
 
-                  {item.requiresSerial && (
-                    <View className="flex-row items-center gap-3">
-                      <Text className="text-[11px] font-bold text-primary-dark">
-                        {item.serials.length}/{item.quantity} seriales
-                      </Text>
-                      <View className="flex-1">
-                        <ProgressBar
-                          percent={Math.round(
-                            (item.serials.length / item.quantity) * 100,
-                          )}
-                        />
+                    {item.requiresSerial && (
+                      <View className="flex-row items-center gap-3">
+                        <Text className="text-[11px] font-bold text-primary-dark">
+                          {item.serials.length}/{item.quantity} seriales
+                        </Text>
+                        <View className="flex-1">
+                          <ProgressBar
+                            percent={Math.round(
+                              (item.serials.length / item.quantity) * 100,
+                            )}
+                          />
+                        </View>
                       </View>
-                    </View>
-                  )}
+                    )}
 
-                  <Text className="mt-0.5 text-[9px] font-bold tracking-[1.1px] text-muted">
-                    {serialMode ? "SERIAL DEL ARTÍCULO" : "CÓDIGO DE BARRAS"}
-                  </Text>
-                  <TextInput
-                    ref={inputRef}
-                    accessibilityLabel={
-                      serialMode
-                        ? "Serial del artículo"
-                        : "Código de barras del artículo"
-                    }
-                    value={code}
-                    onChangeText={(value) => {
-                      setCode(value);
-                      if (error) setError("");
-                      if (validationState !== "idle") {
-                        setValidationState("idle");
+                    <Text className="mt-0.5 text-[9px] font-bold tracking-[1.1px] text-muted">
+                      {serialMode ? "SERIAL DEL ARTÍCULO" : "CÓDIGO DE BARRAS"}
+                    </Text>
+                    <TextInput
+                      ref={inputRef}
+                      accessibilityLabel={
+                        serialMode
+                          ? "Serial del artículo"
+                          : "Código de barras del artículo"
                       }
-                    }}
-                    editable={!busy}
-                    placeholder={
-                      serialMode
-                        ? "Ej. MSV2200-24081"
-                        : "Escanea o escribe el código"
-                    }
-                    placeholderTextColor={colors.muted}
-                    className="-mt-[5px] min-h-[53px] rounded-[13px] border border-field bg-background px-3.5 py-[13px] text-[14px] text-ink"
-                    style={typography.numeric}
-                    autoCorrect={false}
-                    autoCapitalize="characters"
-                    autoComplete="off"
-                    spellCheck={false}
-                    autoFocus
-                    returnKeyType="send"
-                    submitBehavior="submit"
-                    onSubmitEditing={(event) => {
-                      void submitScan(event.nativeEvent.text);
-                    }}
-                  />
-                  {camera.permissionDenied && (
-                    <Text className="-mt-1 text-[10px] leading-4 text-muted">
-                      Activa el permiso de cámara en los ajustes para escanear
-                      desde este teléfono.
-                    </Text>
-                  )}
-                  <View className="-mt-1.5 flex-row items-center gap-[5px]">
-                    <Icon
-                      name="keypad-outline"
-                      color={colors.muted}
-                      size={13}
-                    />
-                    <Text className="text-[10px] text-muted">
-                      Lector tipo teclado · Enter para capturar
-                    </Text>
-                  </View>
-                  <Button
-                    title={
-                      busy
-                        ? "Validando…"
-                        : serialMode
-                          ? "Capturar serial"
-                          : "Validar código"
-                    }
-                    icon="scan-outline"
-                    loading={busy}
-                    disabled={!code.trim()}
-                    onPress={() => {
-                      void submitScan(code);
-                    }}
-                  />
-                </Animated.View>
-              ) : order.items.length ? (
-                <View className="gap-4 rounded-[22px] border border-success-border bg-surface p-[22px]">
-                  <View className="flex-row items-center gap-[9px]">
-                    <Icon
-                      name="checkmark-circle"
-                      color={colors.secondary}
-                      size={26}
-                    />
-                    <Text className="text-[20px] font-bold text-ink">
-                      {predispatchSent
-                        ? "Predespacho enviado"
-                        : "Captura local completa"}
-                    </Text>
-                  </View>
-                  <Text className="text-[13px] leading-[21px] text-muted">
-                    {predispatchSent
-                      ? "Las capturas de esta orden se enviaron al backend. El despacho continúa en proceso."
-                      : "Completaste la captura en esta sesión. Envía los códigos y seriales para registrar el predespacho."}
-                  </Text>
-                  {!predispatchSent ? (
-                    <Button
-                      title="Enviar predespacho"
-                      icon="checkmark-done-outline"
-                      loading={busy}
-                      onPress={() => {
-                        void confirmDispatch();
+                      value={code}
+                      onChangeText={(value) => {
+                        setCode(value);
+                        if (error) setError("");
+                        if (validationState !== "idle") {
+                          setValidationState("idle");
+                        }
+                      }}
+                      editable={!busy}
+                      placeholder={
+                        serialMode
+                          ? "Ej. MSV2200-24081"
+                          : "Escanea o escribe el código"
+                      }
+                      placeholderTextColor={colors.muted}
+                      className="-mt-[5px] min-h-[53px] rounded-[13px] border border-field bg-background px-3.5 py-[13px] text-[14px] text-ink"
+                      style={typography.numeric}
+                      autoCorrect={false}
+                      autoCapitalize="characters"
+                      autoComplete="off"
+                      spellCheck={false}
+                      autoFocus
+                      returnKeyType="send"
+                      submitBehavior="submit"
+                      onSubmitEditing={(event) => {
+                        void submitScan(event.nativeEvent.text);
                       }}
                     />
-                  ) : (
-                    <Button
-                      title="Volver a mis órdenes"
-                      icon="arrow-back"
-                      onPress={goBack}
-                    />
-                  )}
-                </View>
-              ) : (
-                <Notice message="El backend no devolvió artículos para capturar en esta orden." />
-              )}
-
-              {!!error && <Notice message={error} />}
-              {!!feedback && !orderCompleted && (
-                <Notice message={feedback} success />
-              )}
-
-              <View className="mt-2 flex-row items-center justify-between">
-                <Text className="text-[17px] font-bold tracking-[-0.3px] text-ink">
-                  {orderCompleted
-                    ? "Detalle de lo preparado"
-                    : "Secuencia de preparación"}
-                </Text>
-                <Icon name="list-outline" size={20} color={colors.muted} />
-              </View>
-              {!orderCompleted && (
-                <View className="-mt-[9px] flex-row items-start gap-[5px]">
-                  <Icon
-                    name="lock-closed-outline"
-                    size={13}
-                    color={colors.muted}
-                  />
-                  <Text className="flex-1 text-[10px] leading-[15px] text-muted">
-                    El siguiente artículo se habilita al completar el actual.
-                  </Text>
-                </View>
-              )}
-              <View className="rounded-[20px] border border-line bg-surface px-4">
-                {!order.items.length && (
-                  <Text className="py-[18px] text-[13px] text-muted">
-                    El backend no devolvió artículos para esta orden.
-                  </Text>
+                    {camera.permissionDenied && (
+                      <Text className="-mt-1 text-[10px] leading-4 text-muted">
+                        Activa el permiso de cámara en los ajustes para escanear
+                        desde este teléfono.
+                      </Text>
+                    )}
+                    <View className="-mt-1.5 flex-row items-center gap-[5px]">
+                      <Icon
+                        name="keypad-outline"
+                        color={colors.muted}
+                        size={13}
+                      />
+                      <Text className="text-[10px] text-muted">
+                        Lector tipo teclado · Enter para capturar
+                      </Text>
+                    </View>
+                    {!!code.trim() && (
+                      <Button
+                        title={
+                          busy
+                            ? "Validando…"
+                            : serialMode
+                              ? "Capturar serial"
+                              : "Validar código"
+                        }
+                        icon="scan-outline"
+                        loading={busy}
+                        disabled={!code.trim()}
+                        onPress={() => {
+                          void submitScan(code);
+                        }}
+                      />
+                    )}
+                  </Animated.View>
+                ) : order.items.length ? (
+                  <View className="gap-4 rounded-[22px] border border-success-border bg-surface p-[22px]">
+                    <View className="flex-row items-center gap-[9px]">
+                      <Icon
+                        name="checkmark-circle"
+                        color={colors.secondary}
+                        size={26}
+                      />
+                      <Text className="text-[20px] font-bold text-ink">
+                        {predispatchSent
+                          ? "Predespacho enviado"
+                          : "Captura local completa"}
+                      </Text>
+                    </View>
+                    <Text className="text-[13px] leading-[21px] text-muted">
+                      {predispatchSent
+                        ? "Las capturas de esta orden se enviaron al backend. El despacho continúa en proceso."
+                        : "Completaste la captura en esta sesión. Envía los códigos y seriales para registrar el predespacho."}
+                    </Text>
+                    {!predispatchSent ? (
+                      <Button
+                        title="Enviar predespacho"
+                        icon="checkmark-done-outline"
+                        loading={busy}
+                        onPress={() => {
+                          void confirmDispatch();
+                        }}
+                      />
+                    ) : (
+                      <Button
+                        title="Volver a mis órdenes"
+                        icon="arrow-back"
+                        onPress={goBack}
+                      />
+                    )}
+                  </View>
+                ) : (
+                  <Notice message="El backend no devolvió artículos para capturar en esta orden." />
                 )}
-                {order.items.map((line, index) => {
-                  const done = isItemComplete(line);
-                  const current = item?.id === line.id;
-                  return (
-                    <View
-                      key={line.id}
-                      className={`flex-row items-start gap-[11px] py-[18px] ${
-                        index > 0 ? "border-t border-line" : ""
-                      }`}
-                    >
+
+                {!!error && <Notice message={error} />}
+                {!!feedback && !orderCompleted && (
+                  <Notice message={feedback} success />
+                )}
+
+                <View className="mt-2 flex-row items-center justify-between">
+                  <Text className="text-[17px] font-bold tracking-[-0.3px] text-ink">
+                    {orderCompleted
+                      ? "Detalle de lo preparado"
+                      : "Secuencia de preparación"}
+                  </Text>
+                  <Icon name="list-outline" size={20} color={colors.muted} />
+                </View>
+                {!orderCompleted && (
+                  <View className="-mt-[9px] flex-row items-start gap-[5px]">
+                    <Icon
+                      name="lock-closed-outline"
+                      size={13}
+                      color={colors.muted}
+                    />
+                    <Text className="flex-1 text-[10px] leading-[15px] text-muted">
+                      El siguiente artículo se habilita al completar el actual.
+                    </Text>
+                  </View>
+                )}
+                <View className="rounded-[20px] border border-line bg-surface px-4">
+                  {!order.items.length && (
+                    <Text className="py-[18px] text-[13px] text-muted">
+                      El backend no devolvió artículos para esta orden.
+                    </Text>
+                  )}
+                  {order.items.map((line, index) => {
+                    const done = isItemComplete(line);
+                    const current = item?.id === line.id;
+                    return (
                       <View
-                        className={`h-[29px] w-[29px] items-center justify-center rounded-[10px] ${
-                          current
-                            ? "bg-primary-light"
-                            : done
-                              ? "bg-secondary-light"
-                              : "bg-background"
+                        key={line.id}
+                        className={`flex-row items-start gap-[11px] py-[18px] ${
+                          index > 0 ? "border-t border-line" : ""
                         }`}
                       >
-                        {done ? (
-                          <Icon
-                            name="checkmark"
-                            size={17}
-                            color={colors.secondary}
-                          />
-                        ) : current ? (
-                          <Text className="text-[12px] font-bold text-primary-dark">
-                            {index + 1}
-                          </Text>
-                        ) : (
-                          <Icon
-                            name="lock-closed-outline"
-                            color={colors.muted}
-                            size={14}
-                          />
-                        )}
-                      </View>
-                      <View className="flex-1">
-                        <Text
-                          className={`text-[12px] font-semibold leading-[18px] ${
-                            !done && !current ? "text-muted" : "text-ink"
+                        <View
+                          className={`h-[29px] w-[29px] items-center justify-center rounded-[10px] ${
+                            current
+                              ? "bg-primary-light"
+                              : done
+                                ? "bg-secondary-light"
+                                : "bg-background"
                           }`}
                         >
-                          {line.name}
-                        </Text>
-                        <Text className="mt-[3px] text-[10px] leading-[15px] text-muted">
-                          Ítem {line.itemnum} · Renglón {line.rennum} · Almacén{" "}
-                          {line.codalma}
-                        </Text>
-                        <Text className="mt-[3px] text-[10px] leading-[15px] text-muted">
-                          {line.quantity}{" "}
-                          {line.quantity === 1 ? "unidad" : "unidades"} ·{" "}
-                          {line.requiresSerial
-                            ? `${line.serials.length}/${line.quantity} seriales`
-                            : "Sin serial"}
-                        </Text>
-                        <Text
-                          selectable
-                          className="mt-[5px] text-[10px] leading-[15px] text-muted"
-                        >
-                          Referencia: {line.refbarra || "Sin código de barras"}
-                        </Text>
-                        {!!line.codbarra && (
+                          {done ? (
+                            <Icon
+                              name="checkmark"
+                              size={17}
+                              color={colors.secondary}
+                            />
+                          ) : current ? (
+                            <Text className="text-[12px] font-bold text-primary-dark">
+                              {index + 1}
+                            </Text>
+                          ) : (
+                            <Icon
+                              name="lock-closed-outline"
+                              color={colors.muted}
+                              size={14}
+                            />
+                          )}
+                        </View>
+                        <View className="flex-1">
+                          <Text
+                            className={`text-[12px] font-semibold leading-[18px] ${
+                              !done && !current ? "text-muted" : "text-ink"
+                            }`}
+                          >
+                            {line.name}
+                          </Text>
+                          <Text className="mt-[3px] text-[10px] leading-[15px] text-muted">
+                            Ítem {line.itemnum} · Renglón {line.rennum} ·
+                            Almacén {line.codalma}
+                          </Text>
+                          <Text className="mt-[3px] text-[10px] leading-[15px] text-muted">
+                            {line.quantity}{" "}
+                            {line.quantity === 1 ? "unidad" : "unidades"} ·{" "}
+                            {line.requiresSerial
+                              ? `${line.serials.length}/${line.quantity} seriales`
+                              : "Sin serial"}
+                          </Text>
                           <Text
                             selectable
                             className="mt-[5px] text-[10px] leading-[15px] text-muted"
                           >
-                            Código capturado: {line.codbarra}
+                            Referencia:{" "}
+                            {line.refbarra || "Sin código de barras"}
                           </Text>
-                        )}
-                        {!!line.lectura && (
-                          <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
-                            Lectura del backend: {line.lectura}
-                          </Text>
-                        )}
-                        {line.serials.map((serial) => (
-                          <Text
-                            key={serial}
-                            selectable
-                            className="mt-[5px] text-[10px] text-secondary"
-                          >
-                            Serial: {serial}
-                          </Text>
-                        ))}
-                        {!!line.horacapture && (
-                          <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
-                            Captura: {line.horacapture} · Usuario:{" "}
-                            {line.recouser}
-                          </Text>
-                        )}
+                          {!!line.codbarra && (
+                            <Text
+                              selectable
+                              className="mt-[5px] text-[10px] leading-[15px] text-muted"
+                            >
+                              Código capturado: {line.codbarra}
+                            </Text>
+                          )}
+                          {!!line.lectura && (
+                            <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
+                              Lectura del backend: {line.lectura}
+                            </Text>
+                          )}
+                          {line.serials.map((serial) => (
+                            <Text
+                              key={serial}
+                              selectable
+                              className="mt-[5px] text-[10px] text-secondary"
+                            >
+                              Serial: {serial}
+                            </Text>
+                          ))}
+                          {!!line.horacapture && (
+                            <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
+                              Captura: {line.horacapture} · Usuario:{" "}
+                              {line.recouser}
+                            </Text>
+                          )}
+                        </View>
+                        <Text
+                          className={`mt-1 text-[9px] font-bold ${
+                            done
+                              ? "text-secondary"
+                              : current
+                                ? "text-primary-dark"
+                                : "text-muted"
+                          }`}
+                        >
+                          {done ? "Listo" : current ? "Actual" : "Pendiente"}
+                        </Text>
                       </View>
-                      <Text
-                        className={`mt-1 text-[9px] font-bold ${
-                          done
-                            ? "text-secondary"
-                            : current
-                              ? "text-primary-dark"
-                              : "text-muted"
-                        }`}
-                      >
-                        {done ? "Listo" : current ? "Actual" : "Pendiente"}
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
-              <Text className="text-center text-[9px] leading-4 text-muted">
-                Backend conectado · Las capturas se envían al confirmar el
-                predespacho.
-              </Text>
-            </ScrollView>
+                    );
+                  })}
+                </View>
+                <Text className="text-center text-[9px] leading-4 text-muted">
+                  Backend conectado · Las capturas se envían al confirmar el
+                  predespacho.
+                </Text>
+              </ScrollView>
+              {showScrollToTop && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Volver arriba"
+                  onPress={() =>
+                    scrollViewRef.current?.scrollTo({ y: 0, animated: true })
+                  }
+                  className="absolute bottom-5 right-5 z-10 h-12 w-12 items-center justify-center rounded-full bg-primary shadow-lg"
+                >
+                  <Icon name="arrow-up" size={22} color={colors.surface} />
+                </Pressable>
+              )}
+            </>
           )}
         </View>
       </KeyboardAvoidingView>

@@ -3,17 +3,17 @@ import { create, isAxiosError } from "axios";
 
 import type { DispatchItem, DispatchOrder } from "../domain/dispatch.ts";
 import {
-    createDispatchCaptureStore,
-    DispatchError,
-    isItemComplete,
+  createDispatchCaptureStore,
+  DispatchError,
+  isItemComplete,
 } from "../domain/dispatch.ts";
 import {
-    mapBackendDispatchDetail,
-    parseBackendDispatchItems,
-    parseBackendDispatchOrders,
-    parseBackendOrderId,
-    type BackendDispatchItem,
-    type BackendDispatchOrder,
+  mapBackendDispatchDetail,
+  parseBackendDispatchItems,
+  parseBackendDispatchOrders,
+  parseBackendOrderId,
+  type BackendDispatchItem,
+  type BackendDispatchOrder,
 } from "./backend-dispatch.ts";
 
 function toBackendOrderHeader(order: DispatchOrder): BackendDispatchOrder {

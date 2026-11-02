@@ -1,12 +1,12 @@
 import { router } from "expo-router";
 import {
-    ActivityIndicator,
-    FlatList,
-    Pressable,
-    RefreshControl,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -14,8 +14,8 @@ import { Badge, Button, Icon, Notice } from "@/components/ui";
 import { colors, shadows } from "@/constants/theme";
 import { useDispatchOrders } from "@/hooks/use-dispatch-orders";
 import {
-    getBackendOrderId,
-    type BackendDispatchOrder,
+  getBackendOrderId,
+  type BackendDispatchOrder,
 } from "@/services/backend-dispatch";
 
 function OrderCard({ order }: { order: BackendDispatchOrder }) {
@@ -114,7 +114,7 @@ function OrderCard({ order }: { order: BackendDispatchOrder }) {
             }`}
           />
           <Text className="text-[11px] font-medium text-muted">
-            Responsable: {order.owneruser}
+            Responsable: {order.supervisor}
           </Text>
         </View>
         <View className="flex-row items-center gap-[5px]">
