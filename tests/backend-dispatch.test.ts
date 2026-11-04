@@ -21,6 +21,7 @@ import {
     mapBackendDispatchPayload,
     parseBackendDispatchItems,
     parseBackendDispatchOrders,
+    parseBackendNoSerialBarcodes,
     parseBackendOrderId,
     type BackendDispatchItem,
     type BackendDispatchOrder,
@@ -78,7 +79,11 @@ const line: BackendDispatchItem = {
 
 const params = { prednum: 6242, pednum: 19665 };
 
-function backendFixture(items: BackendDispatchItem[], orderHeader = header) {
+function backendFixture(
+  items: BackendDispatchItem[],
+  orderHeader = header,
+  noSerialBarcodes: string[] = [],
+) {
   const requests: string[] = [];
   const basePath = `/api/dispatch/orders/${orderHeader.prednum}/${orderHeader.pednum}`;
   const adapter: AxiosAdapter = async (config) => {
@@ -86,6 +91,7 @@ function backendFixture(items: BackendDispatchItem[], orderHeader = header) {
     assert.equal(config.method, "get");
     let data: unknown;
     if (config.url === "/api/dispatch/orders") data = [orderHeader];
+    else if (config.url === "/api/dispatch/list") data = noSerialBarcodes;
     else if (config.url === basePath) data = orderHeader;
     else if (config.url === `${basePath}/items`) data = items;
     else throw new Error(`Unexpected request: ${config.url}`);
@@ -139,6 +145,45 @@ test("list parser returns separate headers and preserves nulls and an empty arra
   assert.equal(result[0].supervisor, null);
   result[0].Cliente = "Modificado";
   assert.equal(header.Cliente, "CLIENTE DE PRUEBA");
+});
+
+test("no-serial list parser trims, deduplicates and rejects invalid entries", () => {
+  assert.deepEqual(
+    parseBackendNoSerialBarcodes([" 07590020007163 ", "07590020007163", ""]),
+    ["07590020007163"],
+  );
+  assert.deepEqual(parseBackendNoSerialBarcodes([]), []);
+  for (const payload of [null, {}, ["123", 456]]) {
+    assert.throws(() => parseBackendNoSerialBarcodes(payload), DispatchError);
+  }
+});
+
+test("no-serial list endpoint requests /api/dispatch/list", async () => {
+  const requests: string[] = [];
+  const adapter: AxiosAdapter = async (config) => {
+    requests.push(`${config.method} ${config.url}`);
+    return {
+      data: ["07590020007163"],
+      status: 200,
+      statusText: "OK",
+      headers: new AxiosHeaders(),
+      config,
+    };
+  };
+  const client = createDispatchClient("https://api.example.test/api", adapter);
+  assert.deepEqual(await client.getNoSerialBarcodes(), ["07590020007163"]);
+  assert.deepEqual(requests, ["get /api/dispatch/list"]);
+});
+
+test("barcodes in the no-serial list skip serial capture even when manjser is true", async () => {
+  const { client } = backendFixture([line], header, [` ${line.refbarra} `]);
+  const order = await client.getDispatchOrder("6242-19665");
+  assert.equal(order.items[0].requiresSerial, false);
+
+  const result = await client.checkBarcode(order.id, order.items[0].id, line.refbarra!);
+  assert.equal(result.serial, false);
+  assert.equal(isItemComplete(result.order.items[0]), true);
+  assert.equal(getCurrentItem(result.order), undefined);
 });
 
 test("item endpoint accepts the exact shared array and sends Accept application/json", async () => {
@@ -202,6 +247,9 @@ test("submits the complete predispatch payload with captured barcode and serial"
     }
     if (config.method === "get" && config.url === `${basePath}/items`) {
       return { data: [line], status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+    }
+    if (config.method === "get" && config.url === "/api/dispatch/list") {
+      return { data: [], status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
     }
     if (config.method === "post" && config.url === "/api/dispatch/orders/predispatch") {
       submitted = JSON.parse(String(config.data));
@@ -383,13 +431,15 @@ test("normalizes API origins and /api suffixes without losing reverse proxy pref
   }
 });
 
-test("real client calls the three exact GET endpoints without N+1 list requests or duplicate /api", async (t) => {
+test("real client calls the exact GET endpoints without N+1 list requests or duplicate /api", async (t) => {
   const requests: string[] = [];
   const server = createServer((req, res) => {
     requests.push(`${req.method} ${req.url}`);
     res.setHeader("Content-Type", "application/json");
     if (req.url === "/api/dispatch/orders") {
       res.end(JSON.stringify([header]));
+    } else if (req.url === "/api/dispatch/list") {
+      res.end(JSON.stringify([]));
     } else if (req.url === "/api/dispatch/orders/6242/19665") {
       res.end(JSON.stringify(header));
     } else if (req.url === "/api/dispatch/orders/6242/19665/items") {
@@ -419,6 +469,7 @@ test("real client calls the three exact GET endpoints without N+1 list requests 
     assert.equal(detail.prednum, 6242);
     assert.equal(detail.pednum, 19665);
     assert.deepEqual([...requests].sort(), [
+      "GET /api/dispatch/list",
       "GET /api/dispatch/orders",
       "GET /api/dispatch/orders/6242/19665",
       "GET /api/dispatch/orders/6242/19665/items",
@@ -510,6 +561,7 @@ test("backend local scans fill codbarra and serial1 in exact sequence without se
   assert.deepEqual(requests, [
     "get /api/dispatch/orders/6242/19665",
     "get /api/dispatch/orders/6242/19665/items",
+    "get /api/dispatch/list",
     "get /api/dispatch/orders",
     "get /api/dispatch/orders/6242/19665/items",
   ]);
@@ -527,7 +579,7 @@ test("local drafts survive returning to the detail but not a new app session", a
   assert.equal(reopened.items[0].serial1, "LOCAL-001");
   assert.deepEqual(reopened.items[0].serials, ["LOCAL-001"]);
   assert.equal(getCurrentItem(reopened)?.itemnum, 2);
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 3);
 
   const { client: newSession } = backendFixture([line, { ...line, itemnum: 2 }]);
   const reloaded = await newSession.getDispatchOrder(original.id);
@@ -543,7 +595,7 @@ test("concurrent detail loads do not overwrite a captured local serial with stal
     const isItems = config.url?.endsWith("/items");
     if (isItems && ++itemRequests === 2) await delayedItems;
     return {
-      data: isItems ? [line] : header,
+      data: config.url === "/api/dispatch/list" ? [] : isItems ? [line] : header,
       status: 200, statusText: "OK", headers: new AxiosHeaders(), config,
     };
   };
@@ -594,6 +646,9 @@ test("detail errors propagate instead of creating an empty or completed order", 
   const adapter: AxiosAdapter = async (config) => {
     if (config.url?.endsWith("/items")) {
       throw new AxiosError("No se pudieron cargar los artículos");
+    }
+    if (config.url === "/api/dispatch/list") {
+      return { data: [], status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
     }
     return { data: header, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
   };

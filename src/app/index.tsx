@@ -63,9 +63,6 @@ function OrderCard({ order }: { order: BackendDispatchOrder }) {
       <Text className="mb-2 mt-1 text-[18px] font-bold tracking-[-0.4px] text-ink">
         {customer}
       </Text>
-      <Text className="mb-2 text-[10px] text-muted">
-        Cliente {order.co_cli}
-      </Text>
 
       <View className="mb-1 flex-row flex-wrap gap-x-4 gap-y-1.5">
         <View className="flex-row items-center gap-[5px]">
@@ -80,12 +77,12 @@ function OrderCard({ order }: { order: BackendDispatchOrder }) {
         )}
       </View>
       <View className="flex-row flex-wrap justify-between gap-2.5">
-        <View className="flex-row items-center gap-[5px]">
+        {/* <View className="flex-row items-center gap-[5px]">
           <Icon name="layers-outline" size={15} color={colors.muted} />
           <Text className="text-[11px] text-muted">
             Cantidad de despacho: {order.cantdesp}
           </Text>
-        </View>
+        </View> */}
         <View className="flex-row items-center gap-[5px]">
           <Icon name="time-outline" size={15} color={colors.muted} />
           <Text className="text-[11px] text-muted">{order.fecdesp}</Text>
@@ -106,17 +103,18 @@ function OrderCard({ order }: { order: BackendDispatchOrder }) {
           Finalizado: {order.fecfinalStr || order.fecfinal}
         </Text>
       )}
-      <View className="mt-2 flex-row items-center justify-between gap-2 border-t border-line pt-[15px]">
-        <View className="flex-row items-center gap-[5px]">
-          <View
+
+      <View className="mt-1 flex-row items-center justify-between gap-2 border-t border-line pt-2">
+        {/*  <View className="flex-row items-center gap-[5px]">
+        <View
             className={`mr-0.5 h-[5px] w-[5px] rounded-[3px] ${
               completed ? "bg-secondary" : "bg-primary"
             }`}
-          />
+          /> 
           <Text className="text-[11px] font-medium text-muted">
-            Responsable: {order.supervisor}
+            Responsable: {order.owneruser}
           </Text>
-        </View>
+        </View> */}
         <View className="flex-row items-center gap-[5px]">
           <Text className="text-[12px] font-bold text-primary">
             {completed ? "Ver detalle" : "Escanear"}

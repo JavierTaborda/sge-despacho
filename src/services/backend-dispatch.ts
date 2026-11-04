@@ -50,6 +50,11 @@ export interface DispatchApi {
     params: DispatchOrderParams;
     response: BackendDispatchItem[];
   };
+  getNoSerialBarcodes: {
+    method: "GET";
+    path: "/api/dispatch/list";
+    response: string[];
+  };
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -264,15 +269,29 @@ export function parseBackendDispatchItems(
   });
 }
 
+export function parseBackendNoSerialBarcodes(payload: unknown): string[] {
+  if (!Array.isArray(payload) || payload.some((value) => typeof value !== "string")) {
+    throw new DispatchError("Respuesta inválida del backend: se esperaba una lista de códigos de barras.", 502);
+  }
+  return [...new Set(payload.map((value: string) => value.trim()).filter(Boolean))];
+}
+
 export function mapBackendDispatchDetail(
   payload: unknown,
   params: DispatchOrderParams,
   itemsPayload: unknown,
+  noSerialBarcodes: ReadonlySet<string> = new Set(),
 ): DispatchOrder {
   const header = parseHeader(payload, "order");
   if (header.prednum !== params.prednum || header.pednum !== params.pednum) {
     throw new DispatchError("El backend devolvió una orden diferente a la solicitada.", 502);
   }
-  const items = parseBackendDispatchItems(itemsPayload, params).map(mapItem);
+  const items = parseBackendDispatchItems(itemsPayload, params).map((line) => {
+    const item = mapItem(line);
+    const isInNoSerialList = noSerialBarcodes.has(item.barcode);
+    return isInNoSerialList && item.requiresSerial
+      ? { ...item, requiresSerial: false }
+      : item;
+  });
   return { ...mapHeader(header), items, itemsLoaded: true, cantreng: items.length };
 }

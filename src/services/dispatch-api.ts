@@ -11,6 +11,7 @@ import {
   mapBackendDispatchDetail,
   parseBackendDispatchItems,
   parseBackendDispatchOrders,
+  parseBackendNoSerialBarcodes,
   parseBackendOrderId,
   type BackendDispatchItem,
   type BackendDispatchOrder,
@@ -109,8 +110,15 @@ export function createDispatchClient(backendUrl: string, adapter?: AxiosAdapter)
     return parseBackendDispatchItems(data, params);
   }
 
+  async function getNoSerialBarcodes(): Promise<string[]> {
+    requireBackendConfiguration();
+    const { data } = await api.get<unknown>("/api/dispatch/list");
+    return parseBackendNoSerialBarcodes(data);
+  }
+
   return {
     getDispatchOrderItems,
+    getNoSerialBarcodes,
     async getDispatchOrders(): Promise<BackendDispatchOrder[]> {
       requireBackendConfiguration();
       const { data } = await api.get<unknown>("/api/dispatch/orders");
@@ -121,11 +129,14 @@ export function createDispatchClient(backendUrl: string, adapter?: AxiosAdapter)
       const params = parseBackendOrderId(orderId);
       if (localCaptures.hasOrder(orderId)) return localCaptures.getOrder(orderId);
       const path = `/api/dispatch/orders/${params.prednum}/${params.pednum}`;
-      const [header, items] = await Promise.all([
+      const [header, items, noSerialBarcodes] = await Promise.all([
         api.get<unknown>(path),
         getDispatchOrderItems(orderId),
+        getNoSerialBarcodes(),
       ]);
-      return localCaptures.registerOrder(mapBackendDispatchDetail(header.data, params, items));
+      return localCaptures.registerOrder(
+        mapBackendDispatchDetail(header.data, params, items, new Set(noSerialBarcodes)),
+      );
     },
     async checkBarcode(orderId: string, itemId: string, code: string) {
       return localCaptures.checkBarcode(orderId, itemId, code);
@@ -155,6 +166,7 @@ export const {
   getDispatchOrders,
   getDispatchOrder,
   getDispatchOrderItems,
+  getNoSerialBarcodes,
   checkBarcode,
   checkSerial,
   completeDispatch,
