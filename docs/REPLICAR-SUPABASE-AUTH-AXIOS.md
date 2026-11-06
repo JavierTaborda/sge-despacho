@@ -1,390 +1,176 @@
-# Replicar Supabase, autenticación y Axios
+# Supabase, autenticación y Axios: implementación actual
 
-Esta guía describe cómo trasladar el patrón usado en este proyecto a otra aplicación Expo/React Native con TypeScript.
+SGE Despacho es el proyecto destino del patrón modular. Usa Expo SDK 58,
+Expo Router, React Native, TypeScript y npm (`package-lock.json`). Alias:
+`@/*` apunta a `src/*`. No se añadieron OTP, biometría, roles, signup ni
+`jwt-decode`.
 
-La arquitectura tiene cuatro piezas:
+## Configuración
 
-1. `lib/supabase.ts`: cliente Supabase con persistencia de sesión.
-2. `stores/useAuthStore.ts`: estado global de sesión, usuario y token.
-3. `providers/AuthProvider.tsx`: inicialización y sincronización de renovaciones.
-4. `lib/axios.ts`: cliente HTTP que añade el JWT a cada petición.
-
-## 1. Requisitos
-
-Instala las dependencias:
+Instala el lockfile con `npm ci`. Las dependencias Supabase, Axios, AsyncStorage,
+SecureStore, AES y polyfills ya existían; se añadió solo Zustand 5 con:
 
 ```bash
-npx expo install @react-native-async-storage/async-storage expo-secure-store react-native-get-random-values react-native-url-polyfill
-npm install @supabase/supabase-js axios zustand aes-js jwt-decode
-npm install -D @types/aes-js
+EXPO_NO_DOTENV=1 npx expo install zustand
 ```
 
-Para una app que solo funciona en web no hace falta `expo-secure-store`, `aes-js` ni `react-native-get-random-values`, pero sí el almacenamiento web.
+Para futuras dependencias usa `npx expo install`, consultando compatibilidad SDK.
+No se migró a SQLite ni se modificaron proyectos nativos.
 
-## 2. Variables de entorno
-
-Crea `.env` en la raíz del proyecto y no lo publiques:
+Copia `.env.example` a `.env` y sustituye los placeholders:
 
 ```env
-EXPO_PUBLIC_SUPABASE_URL=https://TU_PROYECTO.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=TU_CLAVE_PUBLICA
-EXPO_PUBLIC_API_URL=https://tu-api.example.com/api/
+EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your-public-anon-key
+EXPO_PUBLIC_API_URL=https://api.example.com
 ```
 
-Puedes versionar únicamente un `.env.example`:
-
-```env
-EXPO_PUBLIC_SUPABASE_URL=your-supabase-url-here
-EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key-here
-EXPO_PUBLIC_API_URL=your-api-url-here
-```
-
-Las variables `EXPO_PUBLIC_*` se incluyen en el cliente. La clave anon/publishable está diseñada para usarse en el cliente y debe estar protegida por las políticas RLS de Supabase. Nunca incluyas una `service_role` key ni secretos del backend.
-
-Después de cambiar variables de entorno, reinicia Metro:
+Son valores públicos incluidos en el bundle, no secretos. Nunca uses claves
+`service_role` ni credenciales de usuario en el código. Los archivos `.env`
+y `.env.local` no deben versionarse. Reinicia Metro al cambiar variables:
 
 ```bash
-npx expo start -c
+npx expo start --clear
 ```
 
-En EAS configura las variables en el entorno correspondiente; no dependas de un `.env` local durante el build.
+En builds configura estas mismas variables en el entorno de despliegue.
+La URL API admite `/api` final y prefijos de proxy; se normaliza sin duplicar
+`/api`. HTTP local está permitido para desarrollo, HTTPS es necesario en
+producción. La app muestra errores explícitos si faltan valores o las URLs
+son inválidas, en vez de recurrir a un servidor demo.
 
-## 3. Cliente Supabase
+## Límites de archivos
 
-Crea `lib/supabase.ts`. En móvil, este proyecto cifra el valor de sesión con AES, guarda la clave en `SecureStore` y guarda el valor cifrado en `AsyncStorage`. En web usa `localStorage`.
-
-```ts
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createClient } from "@supabase/supabase-js";
-import * as aesjs from "aes-js";
-import * as SecureStore from "expo-secure-store";
-import { AppState, Platform } from "react-native";
-import "react-native-get-random-values";
-import "react-native-url-polyfill/auto";
-
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
-const isWeb = Platform.OS === "web";
-
-class CustomSecureStore {
-  private async encrypt(key: string, value: string) {
-    const encryptionKey = crypto.getRandomValues(new Uint8Array(32));
-    const cipher = new aesjs.ModeOfOperation.ctr(
-      encryptionKey,
-      new aesjs.Counter(1),
-    );
-    const encryptedBytes = cipher.encrypt(aesjs.utils.utf8.toBytes(value));
-
-    await SecureStore.setItemAsync(
-      key,
-      aesjs.utils.hex.fromBytes(encryptionKey),
-    );
-    return aesjs.utils.hex.fromBytes(encryptedBytes);
-  }
-
-  private async decrypt(key: string, value: string) {
-    const encryptionKeyHex = await SecureStore.getItemAsync(key);
-    if (!encryptionKeyHex) return null;
-
-    const cipher = new aesjs.ModeOfOperation.ctr(
-      aesjs.utils.hex.toBytes(encryptionKeyHex),
-      new aesjs.Counter(1),
-    );
-    const decryptedBytes = cipher.decrypt(aesjs.utils.hex.toBytes(value));
-    return aesjs.utils.utf8.fromBytes(decryptedBytes);
-  }
-
-  async getItem(key: string) {
-    const value = await AsyncStorage.getItem(key);
-    return value ? this.decrypt(key, value) : null;
-  }
-
-  async setItem(key: string, value: string) {
-    await AsyncStorage.setItem(key, await this.encrypt(key, value));
-  }
-
-  async removeItem(key: string) {
-    await AsyncStorage.removeItem(key);
-    await SecureStore.deleteItemAsync(key);
-  }
-}
-
-const webStorage = {
-  getItem: async (key: string) =>
-    typeof window === "undefined" ? null : window.localStorage.getItem(key),
-  setItem: async (key: string, value: string) => {
-    if (typeof window !== "undefined") window.localStorage.setItem(key, value);
-  },
-  removeItem: async (key: string) => {
-    if (typeof window !== "undefined") window.localStorage.removeItem(key);
-  },
-};
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    storage: isWeb ? webStorage : new CustomSecureStore(),
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: isWeb,
-  },
-});
-
-if (!isWeb) {
-  AppState.addEventListener("change", (state) => {
-    if (state === "active") supabase.auth.startAutoRefresh();
-    else supabase.auth.stopAutoRefresh();
-  });
-}
+```text
+src/
+  app/                      Rutas finas /, /despacho/[id], /login y layout
+  features/
+    auth/
+      components/           LogoutButton
+      screens/              LoginScreen (email/password)
+    despacho/
+      hooks/                useDispatchOrders
+      screens/              OrdersScreen y DispatchScreen existentes
+      services/             Servicio producción y lógica inyectable
+  lib/                      Supabase y Axios únicos, interceptor HTTP
+  stores/                   Store Zustand y factory testable
+  providers/                AuthProvider único
+  services/                 Ciclo de vida auth y DTOs/mapeo existentes
+  domain/                   Reglas y tipos de despacho existentes
+  components/               UI compartida, sin duplicar tema
+  utils/                    Validadores de configuración
 ```
 
-### Consideraciones del almacenamiento
+No se crearon carpetas vacías ni se movió cada tipo/componente por estética.
+`src/services/dispatch-api.ts` conserva las exportaciones puras para los tests
+históricos. Las pantallas usan el servicio de producción de la feature.
 
-- La persistencia debe usar la misma implementación en toda la app.
-- `localStorage` no ofrece el mismo nivel de protección que `SecureStore`; se usa aquí por compatibilidad web.
-- El cifrado en el cliente no sustituye a RLS, validación del backend ni revocación de sesiones.
-- Para una primera implementación también puedes usar `AsyncStorage` directamente, pero `SecureStore` es preferible para material sensible.
+## Sesión y navegación
 
-## 4. Store de autenticación
+1. `lib/supabase.ts` crea a lo sumo un cliente. Si la configuración es inválida,
+   exporta el error y no crea un cliente ficticio.
+2. `AuthProvider` se monta una vez en `app/_layout.tsx`. Su coordinador
+   `services/auth-lifecycle.ts` suscribe `onAuthStateChange` y ejecuta
+   `getSession`. Mientras restaura no monta los guards ni las pantallas privadas.
+3. `stores/useAuthStore.ts` enlaza la factory `stores/auth-state.ts` con
+   Supabase. Sesión, access token y `userId` se actualizan atómicamente.
+   `loading` representa restauración; `busy` representa login/logout.
+4. Los eventos, incluido `TOKEN_REFRESHED`, actualizan el store. Una revisión
+   impide que una restauración tardía sobrescriba un evento más reciente.
+   El callback de Supabase no espera llamadas auth, para evitar bloqueos.
+5. En móvil el provider inicia/para auto-refresh con el estado inicial de
+   `AppState` y sus cambios. Retira listener, suscripción y refresh al desmontar.
+   En web Supabase administra visibilidad y renovación; no se añade AppState.
+6. `Stack.Protected` restringe `/` y `/despacho/[id]`; solo `/login` está
+   disponible sin sesión. No se cambian las URLs mediante grupos innecesarios.
+   Login válido abre la lista; logout invalida el historial privado.
+7. **Cerrar sesión**, visible en la cabecera móvil de la lista, usa Supabase
+   `signOut` con su semántica predeterminada. Un fallo se muestra y no se
+   fuerza un éxito local falso. Restauración fallida permite reintentar;
+   credenciales inválidas muestran un mensaje en español.
 
-Crea un store Zustand que sea la única fuente de verdad para el token que consumirá Axios. El ejemplo mínimo cubre login, restauración y logout:
+La app necesita cuentas existentes configuradas en Supabase para email/password.
+No crea usuarios ni depende de un JWT decodificado para autorizar.
 
-```ts
-import { Session } from "@supabase/supabase-js";
-import { create } from "zustand";
-import { supabase } from "@/lib/supabase";
+## Persistencia preservada
 
-interface AuthState {
-  session: Session | null;
-  token: string | null;
-  userId: string | undefined;
-  loading: boolean;
-  setSession: (session: Session | null) => void;
-  setToken: (token: string | null) => void;
-  signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signOut: () => Promise<void>;
-  initializeAuth: () => Promise<void>;
-}
+- Móvil: mismo AES-256-CTR, contador y formato hexadecimal; clave de cifrado en
+  SecureStore, ciphertext en AsyncStorage. No cambian las claves de Supabase.
+- Web: mismo adaptador `localStorage`, compatible con ausencia de `window`
+  durante renderizado en servidor.
+- Zustand no usa middleware persist ni duplica el almacenamiento de tokens.
+- Los listeners del ciclo de vida ya no se registran como efecto del módulo.
+  Auto-refresh móvil se inicia explícitamente desde el provider.
 
-export const useAuthStore = create<AuthState>((set) => ({
-  session: null,
-  token: null,
-  userId: undefined,
-  loading: true,
+El cifrado local no vuelve confiable una sesión ni sustituye RLS, permisos o
+revocación. En web hay riesgos de XSS/localStorage; sigue siendo necesario
+mantener dependencias, transporte seguro y controles de backend.
 
-  setSession: (session) => set({ session }),
-  setToken: (token) => set({ token }),
+## HTTP y capturas
 
-  signIn: async (email, password) => {
-    set({ loading: true });
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+`lib/axios.ts` crea la única instancia REST de producción. El interceptor
+lee `useAuthStore.getState().token` **en cada request** y establece
+`Authorization: Bearer <token>` o elimina un header antiguo si no hay sesión.
+Los errores HTTP siguen propagándose a la UI; no se ocultan 401 ni se hace
+un logout automático por cualquier error de transporte.
 
-      if (data.session) {
-        set({
-          session: data.session,
-          token: data.session.access_token,
-          userId: data.user.id,
-        });
-      }
+`features/despacho/services/dispatch-api.ts` inyecta ese cliente en
+`createDispatchService`. Conserva:
 
-      return { error };
-    } catch (error) {
-      return { error: error as Error };
-    } finally {
-      set({ loading: false });
-    }
-  },
+- GET `/api/dispatch/orders`.
+- GET `/api/dispatch/orders/:prednum/:pednum`.
+- GET `/api/dispatch/orders/:prednum/:pednum/items`.
+- GET `/api/dispatch/list`.
+- POST `/api/dispatch/orders/predispatch`, con cabecera/artículos originales.
 
-  signOut: async () => {
-    await supabase.auth.signOut();
-    set({ session: null, token: null, userId: undefined, loading: false });
-  },
+Las validaciones y UX de escaneo permanecen. La finalización continúa bloqueada
+porque no existe endpoint para ella. No se inventan rutas de captura remota.
 
-  initializeAuth: async () => {
-    set({ loading: true });
-    try {
-      const { data, error } = await supabase.auth.getSession();
-      const session = error ? null : data.session;
-      set({
-        session,
-        token: session?.access_token ?? null,
-        userId: session?.user.id,
-      });
-    } finally {
-      set({ loading: false });
-    }
-  },
-}));
+El epoch de sesión cambia al salir o cambiar de usuario: limpia inmediatamente
+las capturas en memoria y remonta las pantallas. Los detalles pendientes del
+epoch anterior se rechazan antes de registrar una orden. Volver a entrar con el
+mismo usuario después de logout no recupera sus borradores anteriores.
+`TOKEN_REFRESHED` del mismo usuario no borra el avance.
+
+`createDispatchClient(url, adapter?)` conserva normalización, timeout y semántica
+de los tests; solo ese seam aislado crea instancias propias. No se usa en
+producción. Los módulos puros importan `.ts` explícitamente para el runner Node,
+sin arrastrar React Native, alias de Metro o el singleton Supabase.
+
+## Verificación
+
+```bash
+node --experimental-strip-types --test tests/auth.test.ts tests/backend-dispatch.test.ts tests/dispatch.test.ts
+npm test
+EXPO_NO_DOTENV=1 npm run lint
+npx tsc --noEmit
 ```
 
-El proyecto original añade al store `role`, `name`, login por OTP, biometría y un estado persistido `active/loggedOut`. Esas piezas se pueden copiar solo si la nueva app las necesita.
+Las nuevas pruebas cubren restauración, eventos concurrentes, token renovado,
+logout y errores, cleanup móvil, ausencia de config y aislamiento de capturas
+incluidas respuestas en vuelo. No necesitan credenciales ni un proyecto remoto.
+El test de tema `Missing native utility: text-[35px]` ya fallaba antes y queda
+fuera del alcance.
 
-Para OTP:
+Para smoke manual, con un backend de pruebas:
 
-```ts
-await supabase.auth.signInWithOtp({ email });
+1. Abre `/` y un enlace `/despacho/6242-19665` sin sesión: deben ir a login.
+2. Prueba campos vacíos y contraseña incorrecta; verifica el mensaje visible.
+3. Inicia sesión y comprueba Bearer en el servidor sin registrar su valor.
+4. Recarga: no debe aparecer la lista privada antes de restaurar.
+5. Captura una fila, sal y vuelve a entrar (mismo usuario y otro usuario):
+   no debe sobrevivir el borrador local.
+6. En Android/iOS, pasa la app a background/foreground y verifica refresh y
+   persistencia real en el dispositivo.
 
-await supabase.auth.verifyOtp({
-  email,
-  token,
-  type: "email",
-});
-```
+Los mocks/unit tests no demuestran conexión real, políticas RLS ni autorización
+de la API. El backend debe validar firma/expiración del JWT, acceso a cada orden
+y todas las escrituras. No se han aplicado migraciones ni conectado proyectos
+remotos desde esta implementación.
 
-Para roles o claims personalizados, valida siempre el JWT en el backend. `jwt-decode` solo decodifica el contenido y no verifica su firma; no debe usarse como mecanismo de autorización.
-
-## 5. Sincronizar renovaciones con `AuthProvider`
-
-Monta este proveedor una sola vez, normalmente alrededor del contenido raíz de Expo Router. Debe inicializar la sesión almacenada y escuchar `TOKEN_REFRESHED`:
-
-```tsx
-import { useEffect } from "react";
-import { supabase } from "@/lib/supabase";
-import { useAuthStore } from "@/stores/useAuthStore";
-
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const initializeAuth = useAuthStore((state) => state.initializeAuth);
-
-  useEffect(() => {
-    void initializeAuth();
-
-    const { data } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_OUT") {
-        useAuthStore.getState().setSession(null);
-        useAuthStore.getState().setToken(null);
-        return;
-      }
-
-      if (session) {
-        useAuthStore.getState().setSession(session);
-        useAuthStore.getState().setToken(session.access_token);
-      }
-    });
-
-    return () => data.subscription.unsubscribe();
-  }, [initializeAuth]);
-
-  return children;
-}
-```
-
-En la app original este proveedor también controla splash, mantenimiento y estado de eliminación de cuenta. Mantén esas decisiones fuera de `lib/supabase.ts` para que el cliente quede reutilizable.
-
-## 6. Cliente Axios con Bearer token
-
-Crea `lib/axios.ts`:
-
-```ts
-import axios from "axios";
-import { useAuthStore } from "@/stores/useAuthStore";
-
-const api = axios.create({
-  baseURL: process.env.EXPO_PUBLIC_API_URL,
-  timeout: 30_000,
-  headers: {
-    "Content-Type": "application/json",
-  },
-});
-
-api.interceptors.request.use(
-  (config) => {
-    const token = useAuthStore.getState().token;
-
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-
-    return config;
-  },
-  (error) => Promise.reject(error),
-);
-
-export default api;
-```
-
-Uso desde un servicio:
-
-```ts
-import api from "@/lib/axios";
-
-export async function getOrders() {
-  const response = await api.get("/orders");
-  return response.data;
-}
-```
-
-No guardes una copia fija del token al crear Axios. El interceptor debe leer `useAuthStore.getState().token` en cada request, porque el access token puede renovarse mientras la app está abierta.
-
-### Respuestas 401
-
-Puedes añadir un interceptor de respuesta para reaccionar a una sesión inválida:
-
-```ts
-api.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    if (error.response?.status === 401) {
-      await useAuthStore.getState().signOut();
-    }
-
-    return Promise.reject(error);
-  },
-);
-```
-
-Hazlo solo si el backend devuelve `401` de forma consistente. No intentes renovar manualmente el token desde Axios si Supabase ya tiene `autoRefreshToken` activo, porque puedes provocar solicitudes duplicadas o carreras de estado.
-
-## 7. Montaje en Expo Router
-
-En `app/_layout.tsx`, coloca el proveedor sobre las rutas que necesitan autenticación:
-
-```tsx
-import { Stack } from "expo-router";
-import { AuthProvider } from "@/providers/AuthProvider";
-
-export default function RootLayout() {
-  return (
-    <AuthProvider>
-      <Stack />
-    </AuthProvider>
-  );
-}
-```
-
-La navegación debe esperar a que `loading` termine antes de decidir si muestra `(auth)` o `(main)`. Así se evita mostrar brevemente el login mientras Supabase restaura la sesión.
-
-## 8. Configuración de Supabase
-
-En el proyecto de Supabase:
-
-1. Configura los proveedores de login que vas a utilizar.
-2. Configura las URLs de redirección si usas magic links u OAuth.
-3. Define las políticas RLS para cada tabla.
-4. Si usas `user_roles`, garantiza una fila por usuario y consulta el rol desde una función o endpoint confiable.
-5. Si agregas claims como `app-role`, `codven` o `name-user`, configura su emisión en el JWT y documenta sus tipos.
-
-La clave pública no reemplaza las políticas RLS. Toda tabla accesible desde la app debe tener políticas explícitas para `authenticated` y, cuando corresponda, `anon`.
-
-## 9. Lista de comprobación
-
-- [ ] `.env` contiene las tres variables y `.env.example` no contiene secretos.
-- [ ] Metro fue reiniciado después de cambiar variables.
-- [ ] La app puede iniciar sesión y `session.access_token` llega al store.
-- [ ] Al cerrar y abrir la app, `getSession()` restaura la sesión esperada.
-- [ ] Al renovarse el token, Axios usa el nuevo valor.
-- [ ] El logout limpia Supabase, Zustand y la navegación.
-- [ ] Una petición protegida incluye `Authorization: Bearer <token>`.
-- [ ] Un `401` se maneja según la política de la app.
-- [ ] Las tablas de Supabase tienen RLS activo y probado.
-- [ ] Web, iOS y Android fueron probados por separado.
-
-## Archivos de referencia de este proyecto
-
-- `lib/supabase.ts`: cliente y almacenamiento multiplataforma.
-- `stores/useAuthStore.ts`: login, OTP, restauración y logout.
-- `providers/AuthProvider.tsx`: ciclo de vida de la sesión.
-- `lib/axios.ts`: interceptor Bearer.
-- `.env.example`: nombres de variables requeridos.
+Documentación consultada: [SDK 58](https://docs.expo.dev/versions/v58.0.0/),
+[índice](https://docs.expo.dev/llms.txt),
+[auth Router](https://docs.expo.dev/router/advanced/authentication/),
+[protected](https://docs.expo.dev/router/advanced/protected/),
+[SecureStore](https://docs.expo.dev/versions/v58.0.0/sdk/securestore/),
+[Supabase](https://docs.expo.dev/guides/using-supabase/).

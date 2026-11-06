@@ -36,7 +36,7 @@ export type DispatchItem = Dtpredes & {
   location: string;
 
   requiresSerial: boolean;
-  // For serialized items, this authorizes only the next serial attempt.
+  // For serialized items, this remains valid until a serial is accepted.
   barcodeChecked: boolean;
   serials: string[];
 };
@@ -209,22 +209,20 @@ export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) 
           order,
         );
       }
-      item.barcodeChecked = false;
       const serial = input.trim().toUpperCase();
       if (!serial) throw new DispatchError("Escanea o escribe un serial.", 422, order);
       if (
-        orders.some((entry) =>
-          entry.items.some((line) =>
-            line.serials.some((captured) => captured.trim().toUpperCase() === serial),
-          ),
+        order.items.some((line) =>
+          line.serials.some((captured) => captured.trim().toUpperCase() === serial),
         )
       ) {
         throw new DispatchError(
-          "Este serial ya fue registrado. Escanea uno diferente.",
+          "Este serial ya fue registrado en esta orden. Escanea uno diferente.",
           409,
           order,
         );
       }
+      item.barcodeChecked = false;
       item.serials.push(serial);
       item.serial1 = serial;
       item.horacapture = new Date().toISOString();

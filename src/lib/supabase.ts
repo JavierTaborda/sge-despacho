@@ -2,13 +2,17 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createClient } from "@supabase/supabase-js";
 import * as aesjs from 'aes-js';
 import * as SecureStore from 'expo-secure-store';
-import { AppState, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import 'react-native-get-random-values';
 import 'react-native-url-polyfill/auto';
 
-//TODO config env for eas build
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
+import { getSupabaseConfiguration } from "../utils/auth-config";
+
+const configuration = getSupabaseConfiguration(
+  process.env.EXPO_PUBLIC_SUPABASE_URL,
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
+);
+export const supabaseConfigurationError = configuration.error;
 
 //for web :
 const isWeb = Platform.OS === "web";
@@ -72,23 +76,15 @@ const WebStorage = {
   },
 };
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+// Sin configuración no se crea un cliente ficticio ni se envían peticiones.
+export const supabase = configuration.error ? null : createClient(configuration.url!, configuration.key!, {
   auth: {
     storage: isWeb ? WebStorage : new CustomSecureStore(),
-    autoRefreshToken: true,
+    autoRefreshToken: isWeb,
     persistSession: true,
     detectSessionInUrl: isWeb,
 
   },
 });
 
-//App state  in mobile
-if (!isWeb) {
-  AppState.addEventListener("change", (state) => {
-    if (state === "active") {
-      supabase.auth.startAutoRefresh();
-    } else {
-      supabase.auth.stopAutoRefresh();
-    }
-  });
-}
+// El provider controla start/stopAutoRefresh en móvil, con limpieza al desmontar.

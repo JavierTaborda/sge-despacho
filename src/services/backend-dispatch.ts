@@ -1,8 +1,8 @@
 import type {
-  DispatchItem,
-  DispatchOrder,
-  DispatchStatus,
-  Dtpredes,
+    DispatchItem,
+    DispatchOrder,
+    DispatchStatus,
+    Dtpredes,
 } from "../domain/dispatch.ts";
 import { DispatchError } from "../domain/dispatch.ts";
 
@@ -212,18 +212,23 @@ function mapHeader(header: BackendDispatchOrder): DispatchOrder {
   };
 }
 
-function mapItem(line: BackendDispatchItem): DispatchItem {
+function mapItem(
+  line: BackendDispatchItem,
+  noSerialBarcodes: ReadonlySet<string>,
+): DispatchItem {
   const serial = line.serial1?.trim();
+  const barcode = line.refbarra?.trim() ?? "";
+  const requiresSerial = !noSerialBarcodes.has(barcode);
   return {
     ...line,
     id: `${getBackendOrderId(line)}-${line.itemnum}`,
     name: displayText(line.Articulo, displayText(line.artdes, line.codart)),
     sku: line.codart,
-    barcode: line.refbarra?.trim() ?? "",
+    barcode,
     quantity: 1,
     location: displayText(line.codalma, "Sin ubicación"),
-    requiresSerial: line.manjser,
-    barcodeChecked: !line.manjser && !!line.codbarra?.trim(),
+    requiresSerial,
+    barcodeChecked: !requiresSerial && !!line.codbarra?.trim(),
     serials: serial ? [serial] : [],
   };
 }
@@ -286,12 +291,8 @@ export function mapBackendDispatchDetail(
   if (header.prednum !== params.prednum || header.pednum !== params.pednum) {
     throw new DispatchError("El backend devolvió una orden diferente a la solicitada.", 502);
   }
-  const items = parseBackendDispatchItems(itemsPayload, params).map((line) => {
-    const item = mapItem(line);
-    const isInNoSerialList = noSerialBarcodes.has(item.barcode);
-    return isInNoSerialList && item.requiresSerial
-      ? { ...item, requiresSerial: false }
-      : item;
-  });
+  const items = parseBackendDispatchItems(itemsPayload, params).map((line) =>
+    mapItem(line, noSerialBarcodes),
+  );
   return { ...mapHeader(header), items, itemsLoaded: true, cantreng: items.length };
 }

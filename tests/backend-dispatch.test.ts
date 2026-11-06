@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 import type { AxiosAdapter } from "axios";
-import { AxiosError, AxiosHeaders } from "axios";
+import { AxiosError, AxiosHeaders, create } from "axios";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -28,10 +28,25 @@ import {
 } from "../src/services/backend-dispatch.ts";
 import {
     createDispatchClient,
+    createDispatchService,
     getErrorMessage,
     getErrorOrder,
     normalizeBackendUrl,
 } from "../src/services/dispatch-api.ts";
+
+function scopedFixture() {
+  let epoch = 0;
+  const adapter: AxiosAdapter = async (config) => ({
+    data: config.url === "/api/dispatch/list" ? []
+      : config.url?.endsWith("/items") ? [line] : header,
+    status: 200, statusText: "OK", headers: new AxiosHeaders(), config,
+  });
+  const api = create({ adapter });
+  return {
+    client: createDispatchService(api, { getSessionScope: () => epoch }),
+    changeSession: () => { epoch++; },
+  };
+}
 
 const header: BackendDispatchOrder = {
   prednum: 6242,
@@ -390,15 +405,27 @@ test("keeps refbarra separate from captured codbarra and restores captured seria
   assert.equal(getOrderProgress(order).checked, 1);
 });
 
-test("Sin serial is not a capture, and manjser is authoritative", () => {
-  const order = mapBackendDispatchDetail(header, params, [
+test("no-serial list alone determines serial capture, and Sin serial is not a capture", () => {
+  const withoutNoSerialList = mapBackendDispatchDetail(header, params, [
     { ...line, manjser: false, lectura: "Sin serial" },
     { ...line, itemnum: 2, manjser: false, lectura: "Sin serial", codbarra: line.refbarra },
   ]);
-  assert.equal(order.items[0].requiresSerial, false);
-  assert.equal(isItemComplete(order.items[0]), false);
-  assert.equal(isItemComplete(order.items[1]), true);
-  assert.equal(getOrderProgress(order).checked, 1);
+  assert.equal(withoutNoSerialList.items[0].requiresSerial, true);
+  assert.equal(withoutNoSerialList.items[1].requiresSerial, true);
+  assert.equal(withoutNoSerialList.items[1].barcodeChecked, false);
+  assert.equal(isItemComplete(withoutNoSerialList.items[0]), false);
+  assert.equal(isItemComplete(withoutNoSerialList.items[1]), false);
+
+  const withNoSerialList = mapBackendDispatchDetail(
+    header,
+    params,
+    [{ ...line, manjser: true, lectura: "Sin serial", codbarra: line.refbarra }],
+    new Set([line.refbarra!]),
+  );
+  assert.equal(withNoSerialList.items[0].requiresSerial, false);
+  assert.equal(withNoSerialList.items[0].barcodeChecked, true);
+  assert.equal(isItemComplete(withNoSerialList.items[0]), true);
+  assert.equal(getOrderProgress(withNoSerialList).checked, 1);
 });
 
 test("accepts genuinely empty arrays but rejects invalid payloads explicitly", () => {
@@ -504,9 +531,9 @@ test("backend local scans fill codbarra and serial1 in exact sequence without se
   const payload = [
     { ...line, itemnum: 7 },
     { ...line, itemnum: 2 },
-    { ...line, itemnum: 9, manjser: false, lectura: "Sin serial" as const },
+    { ...line, itemnum: 9, refbarra: "BARCODE-NO-SERIAL", manjser: false, lectura: "Sin serial" as const },
   ];
-  const { client, requests } = backendFixture(payload);
+  const { client, requests } = backendFixture(payload, header, ["BARCODE-NO-SERIAL"]);
   const order = await client.getDispatchOrder("6242-19665");
   const [first, second, third] = order.items;
   assert.deepEqual(order.items.map((item) => item.itemnum), [7, 2, 9]);
@@ -536,13 +563,14 @@ test("backend local scans fill codbarra and serial1 in exact sequence without se
   await assert.rejects(client.checkSerial(order.id, second.id, "sn-001"), (error) => {
     assert.match(getErrorMessage(error), /ya fue registrado/);
     const updated = getErrorOrder(error);
-    assert.equal(updated?.items[1].barcodeChecked, false);
-    assert.equal(updated?.items[1].serial1, null);
+    assert.ok(updated);
+    assert.equal(updated.items[1].barcodeChecked, true);
+    assert.equal(getCurrentItem(updated)?.id, second.id);
+    assert.equal(updated.items[1].serial1, null);
     return true;
   });
-  await assert.rejects(client.checkSerial(order.id, second.id, "SN-002"), /Primero/);
-  await client.checkBarcode(order.id, second.id, second.barcode);
   const afterSecond = (await client.checkSerial(order.id, second.id, "SN-002")).order;
+  assert.equal(afterSecond.items[1].barcodeChecked, false);
   assert.equal(getCurrentItem(afterSecond)?.id, third.id);
 
   const last = await client.checkBarcode(order.id, third.id, third.barcode);
@@ -623,10 +651,59 @@ test("existing captures cannot authorize a fresh serial or be duplicated by loca
   await assert.rejects(client.checkSerial(order.id, current.id, "NEW-SN"), /Primero/);
   await client.checkBarcode(order.id, current.id, current.barcode);
   await assert.rejects(client.checkSerial(order.id, current.id, "EXISTING-SN"), /ya fue registrado/);
-  await client.checkBarcode(order.id, current.id, current.barcode);
   await assert.rejects(client.checkSerial(order.id, current.id, " \r\n"), /escribe un serial/);
-  await assert.rejects(client.checkSerial(order.id, current.id, "NEW-SN"), /Primero/);
-  assert.deepEqual((await client.getDispatchOrder(order.id)).items[0].serials, ["existing-sn"]);
+  const rejected = await client.getDispatchOrder(order.id);
+  assert.equal(rejected.items[1].barcodeChecked, true);
+  assert.deepEqual(rejected.items[1].serials, []);
+  const accepted = (await client.checkSerial(order.id, current.id, "NEW-SN")).order;
+  assert.equal(accepted.items[1].barcodeChecked, false);
+  assert.deepEqual(accepted.items[1].serials, ["NEW-SN"]);
+  assert.deepEqual(accepted.items[0].serials, ["existing-sn"]);
+});
+
+test("serial uniqueness is scoped to the predispatch order, across all its products", async () => {
+  const adapter: AxiosAdapter = async (config) => {
+    let data: unknown;
+    if (config.url === "/api/dispatch/list") {
+      data = [];
+    } else {
+      const match = config.url?.match(/^\/api\/dispatch\/orders\/(\d+)\/(\d+)(\/items)?$/);
+      assert.ok(match, `Unexpected request: ${config.url}`);
+      const keys = { prednum: Number(match[1]), pednum: Number(match[2]) };
+      data = match[3]
+        ? [
+          { ...line, ...keys },
+          { ...line, ...keys, itemnum: 2, codart: "OTHER-PRODUCT", refbarra: "OTHER-BARCODE" },
+        ]
+        : { ...header, ...keys };
+    }
+    return { data, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+  };
+  const client = createDispatchClient("https://api.example.test", adapter);
+  const orders = await Promise.all(
+    ["6242-19665", "6242-19666", "6243-19665"].map((id) => client.getDispatchOrder(id)),
+  );
+  for (const order of orders) {
+    const [first, second] = order.items;
+    await client.checkBarcode(order.id, first.id, first.barcode);
+    const captured = (await client.checkSerial(order.id, first.id, " shared-sn\r\n")).order;
+    assert.deepEqual(captured.items[0].serials, ["SHARED-SN"]);
+    await client.checkBarcode(order.id, second.id, second.barcode);
+    const before = await client.getDispatchOrder(order.id);
+    for (const invalid of ["SHARED-SN", " shared-sn ", " \r\n"]) {
+      await assert.rejects(client.checkSerial(order.id, second.id, invalid), (error) => {
+        assert.ok(error instanceof DispatchError);
+        assert.equal(error.status, invalid.trim() ? 409 : 422);
+        assert.deepEqual(getErrorOrder(error), before);
+        return true;
+      });
+    }
+    assert.deepEqual(await client.getDispatchOrder(order.id), before);
+    const accepted = (await client.checkSerial(order.id, second.id, "UNIQUE-SN")).order;
+    assert.deepEqual(accepted.items[1].serials, ["UNIQUE-SN"]);
+    assert.equal(accepted.items[1].barcodeChecked, false);
+    assert.equal(getCurrentItem(accepted), undefined);
+  }
 });
 
 test("local scanning rejects missing barcode references and finalized orders", async () => {
@@ -672,4 +749,32 @@ test("surfaces API message bodies for HTTP errors", () => {
 
 test("backend URL is required for data requests", async () => {
   await assert.rejects(createDispatchClient("  ").getDispatchOrders(), /EXPO_PUBLIC_API_URL/);
+});
+
+test("injected production service isolates drafts on logout, same-user re-login or account switch", async () => {
+  const { client, changeSession } = scopedFixture();
+  const order = await client.getDispatchOrder("6242-19665");
+  await client.checkBarcode(order.id, order.items[0].id, line.refbarra!);
+  await client.checkSerial(order.id, order.items[0].id, "LOCAL-SERIAL");
+  assert.deepEqual((await client.getDispatchOrder(order.id)).items[0].serials, ["LOCAL-SERIAL"]);
+  // TOKEN_REFRESHED mantiene el mismo epoch y no pierde avance.
+  assert.deepEqual((await client.getDispatchOrder(order.id)).items[0].serials, ["LOCAL-SERIAL"]);
+  changeSession();
+  await assert.rejects(client.checkBarcode(order.id, order.items[0].id, line.refbarra!), /No encontramos/);
+  const reloaded = await client.getDispatchOrder(order.id);
+  assert.deepEqual(reloaded.items[0].serials, []);
+  assert.equal(reloaded.items[0].barcodeChecked, false);
+  client.clearCaptures();
+  await assert.rejects(client.checkSerial(order.id, order.items[0].id, "OTHER"), /No encontramos/);
+});
+
+test("an in-flight detail from an old session cannot repopulate cleared capture cache", async () => {
+  const { client, changeSession } = scopedFixture();
+  const pending = client.getDispatchOrder("6242-19665");
+  changeSession();
+  client.clearCaptures();
+  await assert.rejects(pending, /La sesión cambió/);
+  await assert.rejects(client.checkBarcode("6242-19665", "6242-19665-1", line.refbarra!), /No encontramos/);
+  const order = await client.getDispatchOrder("6242-19665");
+  assert.deepEqual(order.items[0].serials, []);
 });
