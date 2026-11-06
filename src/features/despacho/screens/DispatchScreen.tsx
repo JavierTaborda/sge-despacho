@@ -14,11 +14,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { Badge, Button, Icon, Notice, ProgressBar } from "@/components/ui";
+import { Button, Icon, Notice, ProgressBar } from "@/components/ui";
 import { colors, shadows, typography } from "@/constants/theme";
 import {
-  getCurrentItem,
   getOrderProgress,
+  getPendingSerialItem,
   isItemComplete,
   isOrderComplete,
   type DispatchOrder,
@@ -114,21 +114,44 @@ export default function DispatchScreen({ id }: { id: string }) {
     if (!busy && refocusAfterScan.current) inputRef.current?.focus();
   }, [busy]);
 
-  const item = order ? getCurrentItem(order) : undefined;
+  const pendingSerialItem = order ? getPendingSerialItem(order) : undefined;
+  const barcodeItem =
+    order && code.trim()
+      ? order.items.find(
+          (line) => line.barcode === code.trim() && !isItemComplete(line),
+        )
+      : undefined;
+  const item = pendingSerialItem ?? barcodeItem;
   const orderCompleted = !!order && isOrderComplete(order);
-  const serialMode = !!item?.barcodeChecked && !!item.requiresSerial;
+  const serialMode = !!pendingSerialItem;
+  const captureComplete =
+    !!order && order.items.length > 0 && order.items.every(isItemComplete);
   const progress = order
     ? getOrderProgress(order)
     : { checked: 0, total: 0, percent: 0 };
-  const itemIndex =
-    order?.items.findIndex((line) => line.id === item?.id) ?? -1;
   async function submitScan(value: string) {
     if (scanSubmitTimer.current) {
       clearTimeout(scanSubmitTimer.current);
       scanSubmitTimer.current = null;
     }
-    if (requestInFlight.current || !order || !item) return;
-    if (!value.trim() && !serialMode) {
+    if (requestInFlight.current || !order || orderCompleted) return;
+    const activeSerialItem = getPendingSerialItem(order);
+    const targetItem =
+      activeSerialItem ??
+      order.items.find(
+        (line) => line.barcode === value.trim() && !isItemComplete(line),
+      );
+    if (!targetItem) {
+      setError(
+        "No encontramos un artículo pendiente con ese código de barras.",
+      );
+      setValidationState("error");
+      setCode("");
+      inputRef.current?.focus();
+      return;
+    }
+    const capturingSerial = !!activeSerialItem;
+    if (!value.trim() && !capturingSerial) {
       setError("Escanea o escribe un código antes de validar.");
       inputRef.current?.focus();
       return;
@@ -140,31 +163,31 @@ export default function DispatchScreen({ id }: { id: string }) {
     setValidationState("idle");
     setFeedback("");
     try {
-      const response = serialMode
-        ? await checkSerial(order.id, item.id, value)
-        : await checkBarcode(order.id, item.id, value);
+      const response = capturingSerial
+        ? await checkSerial(order.id, targetItem.id, value)
+        : await checkBarcode(order.id, targetItem.id, value);
       if (!mounted.current) return;
       setOrder(response.order);
       setValidationState("success");
       setCode("");
-      if (serialMode) {
+      if (capturingSerial) {
         const updatedItem = response.order.items.find(
-          (line) => line.id === item.id,
+          (line) => line.id === targetItem.id,
         );
         setFeedback(
           `Captura local, sin enviar al backend. ${
             updatedItem && isItemComplete(updatedItem)
-              ? `${item.name}: todas las unidades verificadas.`
-              : `Serial registrado. ${updatedItem?.serials.length ?? 0} de ${item.quantity} unidades verificadas. Escanea nuevamente el código de barras para la siguiente unidad.`
+              ? `${targetItem.name}: todas las unidades verificadas.`
+              : `Serial registrado. ${updatedItem?.serials.length ?? 0} de ${targetItem.quantity} unidades verificadas. Escanea nuevamente el código de barras para la siguiente unidad.`
           }`,
         );
       } else if ("serial" in response && response.serial) {
         setFeedback(
-          `Artículo correcto. Ahora escanea el serial de la unidad ${item.serials.length + 1} de ${item.quantity}.`,
+          `${targetItem.name} correcto. Ahora escanea el serial de la unidad ${targetItem.serials.length + 1} de ${targetItem.quantity}.`,
         );
       } else {
         setFeedback(
-          `Artículo sin serial: ${item.quantity} unidades verificadas.`,
+          `${targetItem.name}: artículo sin serial, unidad verificada.`,
         );
       }
     } catch (reason) {
@@ -192,7 +215,7 @@ export default function DispatchScreen({ id }: { id: string }) {
     if (scanSubmitTimer.current) clearTimeout(scanSubmitTimer.current);
 
     const scannedCode = value.trim();
-    if (!item || scannedCode.length <= 4) {
+    if (!order || orderCompleted || scannedCode.length <= 4) {
       scanSubmitTimer.current = null;
       return;
     }
@@ -259,13 +282,7 @@ export default function DispatchScreen({ id }: { id: string }) {
                 ? "Comprobante de despacho"
                 : "Captura local de despacho"}
             </Text>
-            <View className="h-9 w-9 items-center justify-center">
-              <Icon
-                name="shield-checkmark-outline"
-                color={colors.secondary}
-                size={21}
-              />
-            </View>
+            <View className="h-9 w-9 items-center justify-center"></View>
           </View>
 
           {loading ? (
@@ -366,9 +383,9 @@ export default function DispatchScreen({ id }: { id: string }) {
                       onPress={() => router.replace("/")}
                     />
                   </View>
-                ) : item ? (
+                ) : order.items.length > 0 && !captureComplete ? (
                   <Animated.View
-                    className="gap-3.5 rounded-3xl border border-scanner-border bg-surface p-5"
+                    className="gap-3.5 rounded-3xl border border-scanner-border bg-surface p-3"
                     style={[
                       shadows.scanner,
                       {
@@ -389,180 +406,24 @@ export default function DispatchScreen({ id }: { id: string }) {
                       },
                     ]}
                   >
-                    <View className="flex-row items-center justify-between">
-                      <Badge tone="orange">
-                        ARTÍCULO {itemIndex + 1} DE {order.items.length}
-                      </Badge>
-                      <View className="flex-row items-center gap-[5px]">
-                        <Icon
-                          name="grid-outline"
-                          size={13}
-                          color={colors.muted}
-                        />
-                        <Text className="text-[11px] font-semibold text-muted">
-                          {item.location}
+                    {item ? (
+                      <>
+                        <Text className="mt-px text-[21px] font-bold tracking-[-0.5px] text-ink">
+                          {item.name}
                         </Text>
-                      </View>
-                    </View>
-                    <Text className="mt-px text-[21px] font-bold tracking-[-0.5px] text-ink">
-                      {item.name}
-                    </Text>
-                    <Text className="-mt-2 text-[12px] text-muted">
-                      {item.sku} · {item.quantity}{" "}
-                      {item.quantity === 1 ? "unidad" : "unidades"}
-                    </Text>
-                    {/* 
-                  <View className="flex-row items-center gap-2 py-[9px]">
-                    <View className="flex-row items-center gap-1.5">
-                      <View
-                        className={`h-[21px] w-[21px] items-center justify-center rounded-[11px] ${
-                          serialMode ? "bg-secondary" : "bg-primary"
-                        }`}
-                      >
-                        {serialMode ? (
-                          <Icon
-                            name="checkmark"
-                            size={13}
-                            color={colors.surface}
-                          />
-                        ) : order.items.length ? (
-                          <Text className="text-[10px] font-bold text-surface">
-                            1
-                          </Text>
-                        ) : (
-                          <Text className="text-[13px] text-muted">
-                            Esta orden no tiene artículos.
-                          </Text>
-                        )}
-                      </View>
-                      <Text
-                        className={`text-[10px] ${
-                          !serialMode ? "font-bold text-ink" : "text-muted"
-                        }`}
-                      >
-                        Código de barras
-                      </Text>
-                    </View>
-                    <View className="h-px min-w-[8px] flex-1 bg-line" />
-                    <View className="flex-row items-center gap-1.5">
-                      <View
-                        className={`h-[21px] w-[21px] items-center justify-center rounded-[11px] ${
-                          serialMode ? "bg-primary" : "bg-line"
-                        }`}
-                      >
-                        <Text
-                          className={`text-[10px] font-bold ${
-                            serialMode ? "text-surface" : "text-muted"
-                          }`}
-                        >
-                          2
+                        <Text className="-mt-2 text-[12px] text-muted">
+                          {item.sku} · {item.quantity}{" "}
+                          {item.quantity === 1 ? "unidad" : "unidades"}
                         </Text>
-                      </View>
-                      <Text
-                        className={`text-[10px] ${
-                          serialMode ? "font-bold text-ink" : "text-muted"
-                        }`}
-                      >
-                        Serial
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View className="min-h-[176px] overflow-hidden rounded-[13px] bg-scanner">
-                    {camera.cameraEnabled && camera.cameraReady ? (
-                      <View className="h-[176px]">
-                        <CameraView
-                          style={{ flex: 1 }}
-                          facing="back"
-                          onBarcodeScanned={camera.handleBarcodeScanned}
-                          onMountError={camera.handleMountError}
-                          barcodeScannerSettings={{
-                            barcodeTypes: [
-                              "ean13",
-                              "ean8",
-                              "upc_a",
-                              "upc_e",
-                              "code128",
-                              "code39",
-                              "code93",
-                              "itf14",
-                              "datamatrix",
-                              "qr",
-                            ],
-                          }}
-                        />
-                        <View
-                          pointerEvents="none"
-                          className="absolute inset-0 items-center justify-center"
-                        >
-                          <View className="h-[92px] w-[82%] rounded-[10px] border-2 border-secondary" />
-                        </View>
-                      </View>
+                      </>
                     ) : (
-                      <View className="min-h-[176px] items-center justify-center gap-2 p-4">
-                        <View className="absolute left-2.5 top-2.5 h-[22px] w-[22px] rounded-tl-[7px] border-l-2 border-t-2 border-scanner-corner" />
-                        <View className="absolute right-2.5 top-2.5 h-[22px] w-[22px] rounded-tr-[7px] border-r-2 border-t-2 border-scanner-corner" />
-                        <View className="absolute bottom-2.5 left-2.5 h-[22px] w-[22px] rounded-bl-[7px] border-b-2 border-l-2 border-scanner-corner" />
-                        <View className="absolute bottom-2.5 right-2.5 h-[22px] w-[22px] rounded-br-[7px] border-b-2 border-r-2 border-scanner-corner" />
-                        <Icon
-                          name={serialMode ? "scan-outline" : "barcode-outline"}
-                          size={59}
-                          color={colors.primary}
-                        />
-                        <Text className="text-center text-[14px] font-bold text-ink">
-                          {serialMode
-                            ? "Escanea el serial"
-                            : "Escanea el código de barras"}
-                        </Text>
-                        <Text className="text-center text-[10px] leading-4 text-muted">
-                          {serialMode
-                            ? `Unidad ${item.serials.length + 1} de ${item.quantity} · Un serial por unidad`
-                            : item.requiresSerial
-                              ? `Unidad ${item.serials.length + 1} de ${item.quantity} · Primero código de barras, luego serial`
-                              : "Usa tu lector o ingresa el código abajo"}
-                        </Text>
-                      </View>
+                      <Text className="text-muted"></Text>
                     )}
-                  </View> 
 
-                  <Button
-                    title={
-                      camera.cameraEnabled
-                        ? "Ocultar cámara y usar lector"
-                        : "Mostrar cámara"
-                    }
-                    icon={
-                      camera.cameraEnabled
-                        ? "eye-off-outline"
-                        : "camera-outline"
-                    }
-                    secondary
-                    disabled={busy}
-                    onPress={camera.toggleCamera}
-                  />
-                  <Text className="text-[10px] leading-4 text-muted">
-                    La cámara captura un código y se cierra. Ábrela de nuevo
-                    para escanear el siguiente código o serial.
-                  </Text>*/}
                     {!!camera.error && <Notice message={camera.error} />}
 
-                    {item.requiresSerial && (
-                      <View className="flex-row items-center gap-3">
-                        <Text className="text-[11px] font-bold text-primary-dark">
-                          {item.serials.length}/{item.quantity} seriales
-                        </Text>
-                        <View className="flex-1">
-                          <ProgressBar
-                            percent={Math.round(
-                              (item.serials.length / item.quantity) * 100,
-                            )}
-                          />
-                        </View>
-                      </View>
-                    )}
-
-                    <Text className="mt-0.5 text-[9px] font-bold tracking-[1.1px] text-muted">
-                      {serialMode ? "SERIAL DEL ARTÍCULO" : "CÓDIGO DE BARRAS"}
+                    <Text className="mt-0.5 text-[11px] font-bold tracking-[1.1px] text-muted">
+                      {serialMode ? "Esperando serial" : ""}
                     </Text>
                     <TextInput
                       ref={inputRef}
@@ -599,16 +460,7 @@ export default function DispatchScreen({ id }: { id: string }) {
                         desde este teléfono.
                       </Text>
                     )}
-                    <View className="-mt-1.5 flex-row items-center gap-[5px]">
-                      <Icon
-                        name="keypad-outline"
-                        color={colors.muted}
-                        size={13}
-                      />
-                      <Text className="text-[10px] text-muted">
-                        Escáner de teclado · Validación automática
-                      </Text>
-                    </View>
+
                     {!!code.trim() && (
                       <Button
                         title={
@@ -627,7 +479,7 @@ export default function DispatchScreen({ id }: { id: string }) {
                       />
                     )}
                   </Animated.View>
-                ) : order.items.length ? (
+                ) : captureComplete ? (
                   <View className="gap-4 rounded-[22px] border border-success-border bg-surface p-[22px]">
                     <View className="flex-row items-center gap-[9px]">
                       <Icon
@@ -643,7 +495,7 @@ export default function DispatchScreen({ id }: { id: string }) {
                     </View>
                     <Text className="text-[13px] leading-[21px] text-muted">
                       {predispatchSent
-                        ? "Las capturas de esta orden se enviaron al backend. El despacho continúa en proceso."
+                        ? ""
                         : "Completaste la captura en esta sesión. Envía los códigos y seriales para registrar el predespacho."}
                     </Text>
                     {!predispatchSent ? (
@@ -668,30 +520,19 @@ export default function DispatchScreen({ id }: { id: string }) {
                 )}
 
                 {!!error && <Notice message={error} />}
-                {!!feedback && !orderCompleted && (
+                {/* {!!feedback && !orderCompleted && (
                   <Notice message={feedback} success />
-                )}
+                )} */}
 
-                <View className="mt-2 flex-row items-center justify-between">
+                <View className="mt-1 flex-row items-center justify-between">
                   <Text className="text-[17px] font-bold tracking-[-0.3px] text-ink">
                     {orderCompleted
                       ? "Detalle de lo preparado"
-                      : "Secuencia de preparación"}
+                      : "Estado de los artículos"}
                   </Text>
                   <Icon name="list-outline" size={20} color={colors.muted} />
                 </View>
-                {!orderCompleted && (
-                  <View className="-mt-[9px] flex-row items-start gap-[5px]">
-                    <Icon
-                      name="lock-closed-outline"
-                      size={13}
-                      color={colors.muted}
-                    />
-                    <Text className="flex-1 text-[10px] leading-[15px] text-muted">
-                      El siguiente artículo se habilita al completar el actual.
-                    </Text>
-                  </View>
-                )}
+
                 <View className="rounded-[20px] border border-line bg-surface px-4">
                   {!order.items.length && (
                     <Text className="py-[18px] text-[13px] text-muted">
@@ -729,7 +570,7 @@ export default function DispatchScreen({ id }: { id: string }) {
                             </Text>
                           ) : (
                             <Icon
-                              name="lock-closed-outline"
+                              name="barcode-outline"
                               color={colors.muted}
                               size={14}
                             />
@@ -743,37 +584,16 @@ export default function DispatchScreen({ id }: { id: string }) {
                           >
                             {line.name}
                           </Text>
-                          <Text className="mt-[3px] text-[10px] leading-[15px] text-muted">
-                            Ítem {line.itemnum} · Renglón {line.rennum} ·
-                            Almacén {line.codalma}
-                          </Text>
-                          <Text className="mt-[3px] text-[10px] leading-[15px] text-muted">
-                            {line.quantity}{" "}
-                            {line.quantity === 1 ? "unidad" : "unidades"} ·{" "}
-                            {line.requiresSerial
-                              ? `${line.serials.length}/${line.quantity} seriales`
-                              : "Sin serial"}
-                          </Text>
-                          <Text
-                            selectable
-                            className="mt-[5px] text-[10px] leading-[15px] text-muted"
-                          >
-                            Referencia:{" "}
-                            {line.refbarra || "Sin código de barras"}
-                          </Text>
+
                           {!!line.codbarra && (
                             <Text
                               selectable
                               className="mt-[5px] text-[10px] leading-[15px] text-muted"
                             >
-                              Código capturado: {line.codbarra}
+                              Código de barra: {line.codbarra}
                             </Text>
                           )}
-                          {!!line.lectura && (
-                            <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
-                              Lectura del backend: {line.lectura}
-                            </Text>
-                          )}
+
                           {line.serials.length
                             ? line.serials.map((serial) => (
                                 <Text
@@ -792,12 +612,6 @@ export default function DispatchScreen({ id }: { id: string }) {
                                   Serial previo: {line.serial1}
                                 </Text>
                               )}
-                          {!!line.horacapture && (
-                            <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
-                              Captura: {line.horacapture} · Usuario:{" "}
-                              {line.recouser}
-                            </Text>
-                          )}
                         </View>
                         <Text
                           className={`mt-1 text-[9px] font-bold ${
@@ -814,10 +628,6 @@ export default function DispatchScreen({ id }: { id: string }) {
                     );
                   })}
                 </View>
-                <Text className="text-center text-[9px] leading-4 text-muted">
-                  Backend conectado · Las capturas se envían al confirmar el
-                  predespacho.
-                </Text>
               </ScrollView>
               {showScrollToTop && (
                 <Pressable

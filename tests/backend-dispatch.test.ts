@@ -528,7 +528,7 @@ test("backend blocks confirmation and rejects scans of unloaded orders without H
   assert.equal(requests, 0);
 });
 
-test("backend local scans fill codbarra and serial1 in exact sequence without sending writes", async () => {
+test("backend local scans accept random barcode order and serialize each item", async () => {
   const payload = [
     { ...line, itemnum: 7 },
     { ...line, itemnum: 2 },
@@ -538,41 +538,39 @@ test("backend local scans fill codbarra and serial1 in exact sequence without se
   const order = await client.getDispatchOrder("6242-19665");
   const [first, second, third] = order.items;
   assert.deepEqual(order.items.map((item) => item.itemnum), [7, 2, 9]);
-  await assert.rejects(client.checkBarcode(order.id, second.id, second.barcode), /saltar/);
-  await assert.rejects(client.checkSerial(order.id, first.id, "SN-001"), /Primero/);
+  await assert.rejects(client.checkSerial(order.id, second.id, "SN-002"), /Primero/);
   await assert.rejects(client.checkBarcode(order.id, first.id, "OTRO-CODIGO"), /Código incorrecto/);
 
-  const checked = await client.checkBarcode(order.id, first.id, ` ${first.barcode}\r\n`);
+  const checked = await client.checkBarcode(order.id, second.id, ` ${second.barcode}\r\n`);
   assert.equal(checked.valid, true);
   assert.equal(checked.serial, true);
-  assert.equal(checked.order.items[0].codbarra, first.barcode);
-  assert.equal(checked.order.items[0].serial1, null);
+  assert.equal(checked.order.items[1].codbarra, second.barcode);
+  assert.equal(checked.order.items[1].serial1, null);
   assert.equal(getCurrentItem(checked.order)?.id, first.id);
+  await assert.rejects(client.checkBarcode(order.id, first.id, first.barcode), /Completa el serial/);
 
-  const captured = (await client.checkSerial(order.id, first.id, " sn-001\r\n")).order;
-  assert.equal(captured.items[0].serial1, "SN-001");
-  assert.deepEqual(captured.items[0].serials, ["SN-001"]);
-  assert.equal(captured.items[0].barcodeChecked, false);
-  assert.ok(captured.items[0].horacapture);
-  assert.equal(Number.isNaN(Date.parse(captured.items[0].horacapture)), false);
-  assert.equal(captured.items[0].recouser, line.recouser);
-  assert.equal(captured.items[0].changed, false);
-  assert.equal(getCurrentItem(captured)?.id, second.id);
-  await assert.rejects(client.checkSerial(order.id, first.id, "SN-REPETIDO"), /saltar/);
+  const capturedSecond = (await client.checkSerial(order.id, second.id, " sn-002\r\n")).order;
+  assert.equal(capturedSecond.items[1].serial1, "SN-002");
+  assert.deepEqual(capturedSecond.items[1].serials, ["SN-002"]);
+  assert.equal(capturedSecond.items[1].barcodeChecked, false);
+  assert.ok(capturedSecond.items[1].horacapture);
+  assert.equal(Number.isNaN(Date.parse(capturedSecond.items[1].horacapture)), false);
+  assert.equal(capturedSecond.items[1].recouser, line.recouser);
+  assert.equal(capturedSecond.items[1].changed, false);
+  assert.equal(getCurrentItem(capturedSecond)?.id, first.id);
 
-  await client.checkBarcode(order.id, second.id, second.barcode);
-  await assert.rejects(client.checkSerial(order.id, second.id, "sn-001"), (error) => {
+  await client.checkBarcode(order.id, first.id, first.barcode);
+  await assert.rejects(client.checkSerial(order.id, first.id, "sn-002"), (error) => {
     assert.match(getErrorMessage(error), /ya fue registrado/);
     const updated = getErrorOrder(error);
     assert.ok(updated);
-    assert.equal(updated.items[1].barcodeChecked, true);
-    assert.equal(getCurrentItem(updated)?.id, second.id);
-    assert.equal(updated.items[1].serial1, null);
+    assert.equal(updated.items[0].barcodeChecked, true);
+    assert.equal(updated.items[0].serial1, null);
     return true;
   });
-  const afterSecond = (await client.checkSerial(order.id, second.id, "SN-002")).order;
-  assert.equal(afterSecond.items[1].barcodeChecked, false);
-  assert.equal(getCurrentItem(afterSecond)?.id, third.id);
+  const capturedFirst = (await client.checkSerial(order.id, first.id, "SN-001")).order;
+  assert.equal(capturedFirst.items[0].serial1, "SN-001");
+  assert.equal(getCurrentItem(capturedFirst)?.id, third.id);
 
   const last = await client.checkBarcode(order.id, third.id, third.barcode);
   assert.equal(last.serial, false);
@@ -670,7 +668,7 @@ test("fresh serial capture overwrites serial1 and rejects values used by other i
   assert.deepEqual(accepted.items[1].serials, ["SECOND-NEW-SN"]);
 });
 
-test("serial uniqueness is scoped to the predispatch order, across all its products", async () => {
+test("serials may repeat across different products but not within the same product", async () => {
   const adapter: AxiosAdapter = async (config) => {
     let data: unknown;
     if (config.url === "/api/dispatch/list") {
@@ -683,6 +681,13 @@ test("serial uniqueness is scoped to the predispatch order, across all its produ
         ? [
           { ...line, ...keys },
           { ...line, ...keys, itemnum: 2, codart: "OTHER-PRODUCT", refbarra: "OTHER-BARCODE" },
+          {
+            ...line,
+            ...keys,
+            itemnum: 3,
+            codart: " avfr-12w ",
+            refbarra: "SAME-PRODUCT-BARCODE",
+          },
         ]
         : { ...header, ...keys };
     }
@@ -693,24 +698,32 @@ test("serial uniqueness is scoped to the predispatch order, across all its produ
     ["6242-19665", "6242-19666", "6243-19665"].map((id) => client.getDispatchOrder(id)),
   );
   for (const order of orders) {
-    const [first, second] = order.items;
+    const [first, otherProduct, sameProduct] = order.items;
     await client.checkBarcode(order.id, first.id, first.barcode);
     const captured = (await client.checkSerial(order.id, first.id, " shared-sn\r\n")).order;
     assert.deepEqual(captured.items[0].serials, ["SHARED-SN"]);
-    await client.checkBarcode(order.id, second.id, second.barcode);
+    await client.checkBarcode(order.id, otherProduct.id, otherProduct.barcode);
+    const repeatedAcrossProducts =
+      (await client.checkSerial(order.id, otherProduct.id, "SHARED-SN")).order;
+    assert.deepEqual(repeatedAcrossProducts.items[1].serials, ["SHARED-SN"]);
+
+    await client.checkBarcode(order.id, sameProduct.id, sameProduct.barcode);
     const before = await client.getDispatchOrder(order.id);
-    for (const invalid of ["SHARED-SN", " shared-sn ", " \r\n"]) {
-      await assert.rejects(client.checkSerial(order.id, second.id, invalid), (error) => {
+    for (const invalid of ["SHARED-SN", " shared-sn ", "7590000012345", " \r\n"]) {
+      await assert.rejects(client.checkSerial(order.id, sameProduct.id, invalid), (error) => {
         assert.ok(error instanceof DispatchError);
-        assert.equal(error.status, invalid.trim() ? 409 : 422);
+        assert.equal(
+          error.status,
+          invalid.trim() && !invalid.trim().startsWith("759") ? 409 : 422,
+        );
         assert.deepEqual(getErrorOrder(error), before);
         return true;
       });
     }
     assert.deepEqual(await client.getDispatchOrder(order.id), before);
-    const accepted = (await client.checkSerial(order.id, second.id, "UNIQUE-SN")).order;
-    assert.deepEqual(accepted.items[1].serials, ["UNIQUE-SN"]);
-    assert.equal(accepted.items[1].barcodeChecked, false);
+    const accepted = (await client.checkSerial(order.id, sameProduct.id, "UNIQUE-SN")).order;
+    assert.deepEqual(accepted.items[2].serials, ["UNIQUE-SN"]);
+    assert.equal(accepted.items[2].barcodeChecked, false);
     assert.equal(getCurrentItem(accepted), undefined);
   }
 });

@@ -109,6 +109,11 @@ export function getCurrentItem(order: DispatchOrder) {
   return order.items.find((item) => !isItemComplete(item));
 }
 
+export function getPendingSerialItem(order: DispatchOrder) {
+  if (isOrderComplete(order)) return undefined;
+  return order.items.find((item) => item.requiresSerial && item.barcodeChecked);
+}
+
 export function isOrderComplete(order: DispatchOrder) {
   return order.conformado === "Finalizado";
 }
@@ -151,15 +156,23 @@ export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) 
     return order;
   }
 
-  function requireCurrentItem(orderId: string, itemId: string) {
+  function requirePendingItem(orderId: string, itemId: string) {
     const order = findOrder(orderId);
     if (isOrderComplete(order)) {
       throw new DispatchError("Esta orden ya fue despachada.", 409, order);
     }
-    const item = getCurrentItem(order);
-    if (!item || item.id !== itemId) {
+    const item = order.items.find((entry) => entry.id === itemId);
+    if (!item || isItemComplete(item)) {
       throw new DispatchError(
-        "No puedes saltar artículos. Completa el artículo actual antes de continuar.",
+        "Este artículo no está pendiente de captura.",
+        409,
+        order,
+      );
+    }
+    const pendingSerialItem = getPendingSerialItem(order);
+    if (pendingSerialItem && pendingSerialItem.id !== item.id) {
+      throw new DispatchError(
+        "Completa el serial del artículo escaneado antes de leer otro código de barras.",
         409,
         order,
       );
@@ -178,7 +191,7 @@ export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) 
     getOrders: () => orders.map(copyOrder),
     getOrder: (orderId: string) => copyOrder(findOrder(orderId)),
     checkBarcode(orderId: string, itemId: string, barcode: string) {
-      const { order, item } = requireCurrentItem(orderId, itemId);
+      const { order, item } = requirePendingItem(orderId, itemId);
       item.barcodeChecked = false;
       item.codbarra = null;
       if (!item.barcode) {
@@ -201,7 +214,7 @@ export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) 
       return { valid: true, serial: item.requiresSerial, order: copyOrder(order) };
     },
     checkSerial(orderId: string, itemId: string, input: string) {
-      const { order, item } = requireCurrentItem(orderId, itemId);
+      const { order, item } = requirePendingItem(orderId, itemId);
       if (!item.barcodeChecked || !item.requiresSerial) {
         throw new DispatchError(
           "Primero valida el código de barras de esta unidad.",
@@ -211,16 +224,29 @@ export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) 
       }
       const serial = input.trim().toUpperCase();
       if (!serial) throw new DispatchError("Escanea o escribe un serial.", 422, order);
+      if (serial.startsWith("759")) {
+        throw new DispatchError("El serial no puede comenzar con 759.", 422, order);
+      }
       if (
-        order.items.some((line) => {
-          const alreadyCaptured = line.serials.some(
-            (captured) => captured.trim().toUpperCase() === serial,
-          );
-          const belongsToAnotherItem =
-            line.id !== item.id &&
-            line.serial1?.trim().toUpperCase() === serial;
-          return alreadyCaptured || belongsToAnotherItem;
-        })
+        order.items.some(
+          (line) => line.barcode.trim().toUpperCase() === serial,
+        )
+      ) {
+        throw new DispatchError(
+          "Escaneaste un código de barras; captura el serial del artículo.",
+          422,
+          order,
+        );
+      }
+      if (
+        order.items.some(
+          (line) =>
+            line.sku.trim().toUpperCase() === item.sku.trim().toUpperCase() &&
+            (line.serial1?.trim().toUpperCase() === serial ||
+              line.serials.some(
+                (captured) => captured.trim().toUpperCase() === serial,
+              )),
+        )
       ) {
         throw new DispatchError(
           "Este serial ya fue registrado en esta orden. Escanea uno diferente.",

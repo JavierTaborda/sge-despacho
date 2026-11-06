@@ -194,17 +194,17 @@ Al configurar `EXPO_PUBLIC_API_URL`, la app consulta los datos reales y permite
 - Se debe escanear primero el código de barras, que se compara con `refbarra`.
   Si `refbarra` no está en `/api/dispatch/list`, se solicita un serial para esa fila. Un `codbarra`
   recibido del backend no autoriza por sí solo un nuevo intento de serial.
-- El lector tipo teclado debe enviar **Enter** para capturar; también se puede
-  usar el botón de validación. La cámara es opcional: se abre para leer un código
-  y se cierra después de cada lectura, para no capturar el código de barras como
-  serial mientras sigue apuntando al mismo artículo.
+- El lector tipo teclado puede validar automáticamente al completar una lectura
+  de más de cuatro caracteres; **Enter** y el botón manual también funcionan.
+  La cámara es opcional: se abre para leer un código y se cierra después de cada
+  lectura.
 - Una captura válida llena `codbarra` o `serial1` y `horacapture` en el borrador
   del detalle. Los seriales se recortan y convierten a mayúsculas.
-  Se respetan la secuencia del array y un código de barras por unidad
-  capturada. Se rechazan valores vacíos y seriales duplicados dentro de la
-  misma orden de predespacho, incluidos los capturados previamente por la API
-  y los de otros artículos de esa orden. Un serial sí puede usarse en otra orden.
-  Si se rechaza un serial, se reintenta solo el serial sin repetir el código de barras.
+  El operador puede escanear los artículos en cualquier orden. Si un artículo
+  requiere serial, debe capturarlo antes de escanear otro barcode. Se rechazan
+  seriales vacíos, los que empiezan por `759` y los repetidos para el mismo SKU;
+  un serial puede repetirse en otro SKU o en otra orden. Si se rechaza un serial,
+  se reintenta solo el serial sin repetir el código de barras.
 - Los borradores permanecen en memoria al volver a una orden durante la sesión.
   **Se pierden al recargar/cerrar la app, salir o cambiar de usuario**;
   no hay almacenamiento persistente de capturas.
@@ -223,23 +223,22 @@ del servidor se muestran; no se simula éxito ni se marca la orden finalizada.
 ## Flujo
 
 1. Inicia sesión y selecciona una orden. Puedes buscar por número, cliente o zona.
-2. Escanea el código de barras del **artículo actual**.
+2. Escanea el código de barras de cualquier artículo pendiente; el producto se
+   identifica por `refbarra` y se muestra después de la lectura.
 3. La validación local devuelve `valid: true` y `serial: true | false`.
    Un código incorrecto devuelve un error; **no** se interpreta como `serial: false`.
-4. Si `serial: true`, escanea **código de barras → serial para cada unidad**.
-   Después de cada serial válido se vuelve a pedir el código de barras, aunque siga
-   siendo el mismo producto. Los seriales del artículo pueden capturarse en
-   cualquier orden, pero cada uno requiere su propio escaneo previo del código.
-   Un serial rechazado, vacío o repetido conserva la validación del código:
-   reintenta solo el serial, sin volver a escanear el código de barras.
+4. Si `serial: true`, escanea el serial de ese artículo antes de empezar otro.
+   Cada unidad del mismo producto requiere su propio barcode y serial. Un serial
+   rechazado, vacío, iniciado por `759` o duplicado en el mismo SKU conserva la
+   validación del código para reintentar el serial.
 5. Si `serial: false`, una validación del código completa la cantidad de esa línea.
-6. Al completar la línea se habilita el siguiente artículo, nunca antes.
+6. Repite con cualquier artículo pendiente; no hay un orden fijo entre productos.
 7. Solo después de verificar todo puedes enviar el predespacho al backend.
    La lista sigue reflejando el estado que devuelve el servidor.
 
-La pistola debe funcionar como teclado USB/Bluetooth (HID), con terminador Enter.
-Toca el campo de código para darle foco y escanea. También puedes escribir y
-validar manualmente. La app conserva el foco después de cada captura desde el
+La pistola debe funcionar como teclado USB/Bluetooth (HID). Toca el campo para
+darle foco y escanea; las lecturas de más de cuatro caracteres se validan al
+completarse. También puedes escribir y validar manualmente. La app conserva el foco después de cada captura desde el
 lector. La cámara opcional solicita permisos solo cuando se utiliza.
 
 El backend debe volver a validar secuencia, cantidades, duplicados y permisos

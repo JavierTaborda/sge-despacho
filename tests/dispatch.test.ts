@@ -124,9 +124,12 @@ test("rejects incorrect and empty barcodes rather than returning serial: false",
   assert.equal(getOrderStatus(store.getOrder("OD-1048")), "pending");
 });
 
-test("rejects skipping lines and scanning serials before the barcode", () => {
+test("accepts barcode capture in any order and rejects serials before their barcode", () => {
   const store = setup();
-  assert.throws(() => store.checkBarcode("OD-1048", "item-2", "7801234567029"), /saltar/);
+  const secondItem = store.checkBarcode("OD-1048", "item-2", "7801234567029");
+  assert.equal(secondItem.serial, false);
+  assert.equal(isItemComplete(secondItem.order.items[1]), true);
+  assert.equal(getCurrentItem(secondItem.order)?.id, "item-1");
   assert.throws(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24081"), /Primero/);
 });
 
@@ -139,6 +142,14 @@ test("serial: true requires a fresh barcode for each unit and accepts any serial
   assert.equal(isItemComplete(response.order.items[0]), false);
   const refreshed = store.checkBarcode("OD-1048", "item-1", "7801234567012");
   assert.equal(refreshed.order.items[0].barcodeChecked, true);
+  assert.throws(
+    () => store.checkBarcode("OD-1048", "item-2", "7801234567029"),
+    /Completa el serial/,
+  );
+  assert.throws(
+    () => store.checkSerial("OD-1048", "item-1", "7801234567029"),
+    /Escaneaste un código de barras/,
+  );
   assert.equal(getOrderProgress(refreshed.order).checked, 0);
   const afterOne = store.checkSerial("OD-1048", "item-1", "msv2200-24082\r\n").order;
   assert.deepEqual(getOrderProgress(afterOne), { checked: 1, total: 5, percent: 20 });
@@ -148,7 +159,6 @@ test("serial: true requires a fresh barcode for each unit and accepts any serial
   assert.equal(afterOne.items[0].serial1, "MSV2200-24082");
   assert.ok(afterOne.items[0].horacapture);
   assert.equal(getOrderStatus(afterOne), "in_progress");
-  assert.throws(() => store.checkBarcode("OD-1048", "item-2", "7801234567029"), /saltar/);
   assert.throws(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24081"), /Primero/);
   store.checkBarcode("OD-1048", "item-1", "7801234567012");
   assert.throws(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24082"), /ya fue registrado/);
@@ -157,7 +167,7 @@ test("serial: true requires a fresh barcode for each unit and accepts any serial
   assert.equal(afterTwo.items[0].serials.length, 2);
   assert.equal(afterTwo.items[0].barcodeChecked, false);
   assert.equal(isItemComplete(afterTwo.items[0]), true);
-  assert.throws(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24083"), /saltar/);
+  assert.throws(() => store.checkSerial("OD-1048", "item-1", "MSV2200-24083"), /no está pendiente/);
 });
 
 test("serial: false completes all quantities of the line and advances automatically", () => {
@@ -174,8 +184,8 @@ test("serial: false completes all quantities of the line and advances automatica
   assert.equal(getCurrentItem(response.order)?.id, "item-3");
 });
 
-test("empty and duplicate serials preserve barcode authorization until a valid capture", () => {
-  for (const invalidSerial of ["", "   ", "MSV2200-24081", " msv2200-24081\r\n"]) {
+test("empty, duplicate and reserved-prefix serials preserve barcode authorization", () => {
+  for (const invalidSerial of ["", "   ", "MSV2200-24081", " msv2200-24081\r\n", "7590000123456"]) {
     const store = setup();
     store.checkBarcode("OD-1048", "item-1", "7801234567012");
     store.checkSerial("OD-1048", "item-1", "MSV2200-24081");
@@ -205,6 +215,16 @@ test("empty and duplicate serials preserve barcode authorization until a valid c
     assert.equal(isItemComplete(accepted.items[0]), true);
     assert.equal(getCurrentItem(accepted)?.id, "item-2");
   }
+});
+
+test("duplicate serials are allowed for different products but not the same product", () => {
+  const store = setup();
+  store.checkBarcode("OD-1048", "item-1", "7801234567012");
+  store.checkSerial("OD-1048", "item-1", "SHARED-SERIAL");
+  store.checkBarcode("OD-1048", "item-3", "7801234567050");
+  const order = store.checkSerial("OD-1048", "item-3", "SHARED-SERIAL").order;
+  assert.deepEqual(order.items[0].serials, ["SHARED-SERIAL"]);
+  assert.deepEqual(order.items[2].serials, ["SHARED-SERIAL"]);
 });
 
 test("a rejected serial allows a valid concurrent retry but does not authorize another unit", async () => {
