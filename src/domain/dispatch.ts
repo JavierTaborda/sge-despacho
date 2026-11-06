@@ -212,9 +212,15 @@ export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) 
       const serial = input.trim().toUpperCase();
       if (!serial) throw new DispatchError("Escanea o escribe un serial.", 422, order);
       if (
-        order.items.some((line) =>
-          line.serials.some((captured) => captured.trim().toUpperCase() === serial),
-        )
+        order.items.some((line) => {
+          const alreadyCaptured = line.serials.some(
+            (captured) => captured.trim().toUpperCase() === serial,
+          );
+          const belongsToAnotherItem =
+            line.id !== item.id &&
+            line.serial1?.trim().toUpperCase() === serial;
+          return alreadyCaptured || belongsToAnotherItem;
+        })
       ) {
         throw new DispatchError(
           "Este serial ya fue registrado en esta orden. Escanea uno diferente.",

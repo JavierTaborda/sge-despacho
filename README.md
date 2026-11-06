@@ -152,7 +152,9 @@ el contrato de consulta compartido:
   Se conserva exactamente el orden del array recibido; no se agrupan ni reordenan
   productos repetidos. `itemnum` identifica cada fila dentro de su despacho/pedido.
 - `refbarra` es la referencia esperada; `codbarra` es la captura existente, no un
-  reemplazo de la referencia. `serial1` restaura el serial capturado.
+  reemplazo de la referencia. `serial1` conserva el valor existente, pero si el
+  código no está en la lista de códigos sin serial, se debe volver a escanear y
+  la nueva captura reemplaza ese valor.
   `lectura: "Sin serial"` por sí sola no prueba que la unidad haya sido capturada.
 - `cantdesp` se presenta como cantidad de despacho en la tarjeta de la lista,
   sin inferir un conteo de artículos ni progreso que el endpoint no proporciona.

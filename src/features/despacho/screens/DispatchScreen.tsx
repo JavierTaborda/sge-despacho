@@ -48,6 +48,7 @@ export default function DispatchScreen({ id }: { id: string }) {
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const inputRef = useRef<TextInputInstance>(null);
   const scrollViewRef = useRef<ComponentRef<typeof ScrollView>>(null);
+  const scanSubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refocusAfterScan = useRef(false);
   const requestInFlight = useRef(false);
   const mounted = useRef(true);
@@ -86,6 +87,12 @@ export default function DispatchScreen({ id }: { id: string }) {
     };
   }, []);
 
+  useEffect(
+    () => () => {
+      if (scanSubmitTimer.current) clearTimeout(scanSubmitTimer.current);
+    },
+    [],
+  );
   useEffect(() => {
     let active = true;
     getDispatchOrder(id)
@@ -116,6 +123,10 @@ export default function DispatchScreen({ id }: { id: string }) {
   const itemIndex =
     order?.items.findIndex((line) => line.id === item?.id) ?? -1;
   async function submitScan(value: string) {
+    if (scanSubmitTimer.current) {
+      clearTimeout(scanSubmitTimer.current);
+      scanSubmitTimer.current = null;
+    }
     if (requestInFlight.current || !order || !item) return;
     if (!value.trim() && !serialMode) {
       setError("Escanea o escribe un código antes de validar.");
@@ -172,6 +183,24 @@ export default function DispatchScreen({ id }: { id: string }) {
         setBusy(false);
       }
     }
+  }
+
+  function handleCodeChange(value: string) {
+    setCode(value);
+    if (error) setError("");
+    if (validationState !== "idle") setValidationState("idle");
+    if (scanSubmitTimer.current) clearTimeout(scanSubmitTimer.current);
+
+    const scannedCode = value.trim();
+    if (!item || scannedCode.length <= 4) {
+      scanSubmitTimer.current = null;
+      return;
+    }
+
+    scanSubmitTimer.current = setTimeout(() => {
+      scanSubmitTimer.current = null;
+      void submitScan(scannedCode);
+    }, 180);
   }
 
   const camera = useBarcodeScanner({
@@ -543,13 +572,7 @@ export default function DispatchScreen({ id }: { id: string }) {
                           : "Código de barras del artículo"
                       }
                       value={code}
-                      onChangeText={(value) => {
-                        setCode(value);
-                        if (error) setError("");
-                        if (validationState !== "idle") {
-                          setValidationState("idle");
-                        }
-                      }}
+                      onChangeText={handleCodeChange}
                       editable={!busy}
                       placeholder={
                         serialMode
@@ -583,7 +606,7 @@ export default function DispatchScreen({ id }: { id: string }) {
                         size={13}
                       />
                       <Text className="text-[10px] text-muted">
-                        Lector tipo teclado · Enter para capturar
+                        Escáner de teclado · Validación automática
                       </Text>
                     </View>
                     {!!code.trim() && (
@@ -751,15 +774,24 @@ export default function DispatchScreen({ id }: { id: string }) {
                               Lectura del backend: {line.lectura}
                             </Text>
                           )}
-                          {line.serials.map((serial) => (
-                            <Text
-                              key={serial}
-                              selectable
-                              className="mt-[5px] text-[10px] text-secondary"
-                            >
-                              Serial: {serial}
-                            </Text>
-                          ))}
+                          {line.serials.length
+                            ? line.serials.map((serial) => (
+                                <Text
+                                  key={serial}
+                                  selectable
+                                  className="mt-[5px] text-[10px] text-secondary"
+                                >
+                                  Serial: {serial}
+                                </Text>
+                              ))
+                            : line.serial1 && (
+                                <Text
+                                  selectable
+                                  className="mt-[5px] text-[10px] text-muted"
+                                >
+                                  Serial previo: {line.serial1}
+                                </Text>
+                              )}
                           {!!line.horacapture && (
                             <Text className="mt-[5px] text-[10px] leading-[15px] text-muted">
                               Captura: {line.horacapture} · Usuario:{" "}
