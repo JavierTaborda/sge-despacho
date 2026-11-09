@@ -241,14 +241,14 @@ export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) 
       if (
         order.items.some(
           (line) =>
-            line.sku.trim().toUpperCase() === item.sku.trim().toUpperCase() &&
+            // line.sku.trim().toUpperCase() === item.sku.trim().toUpperCase() &&
             (line.serial1?.trim().toUpperCase() === serial ||
               line.serials.some(
                 (captured) => captured.trim().toUpperCase() === serial,
               )),
         )
       ) {
-        throw new DispatchError(
+        throw new DispatchError( 
           "Este serial ya fue registrado en esta orden. Escanea uno diferente.",
           409,
           order,

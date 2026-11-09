@@ -594,6 +594,13 @@ export default function DispatchScreen({ id }: { id: string }) {
                             </Text>
                           )}
 
+                          <Text
+                            selectable
+                            className="mt-[5px] text-[10px] leading-[15px] text-muted"
+                          >
+                            Ref barra: {line.refbarra}
+                          </Text>
+
                           {line.serials.length
                             ? line.serials.map((serial) => (
                                 <Text
