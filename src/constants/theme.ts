@@ -17,6 +17,8 @@ export const colors = {
   fieldBorder: "#D9DDE3",
   scannerBackground: "#EBF0F2 ",
   scannerBorder: "#0fdc73",
+  scannerSerial: "#F28C28",
+  scannerSerialLight: "#FFF5EB",
   scannerCorner: "#080cf3",
   successBorder: "#CBE8D8",
   inverseMuted: "#B9BEC7",

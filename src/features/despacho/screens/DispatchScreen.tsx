@@ -41,7 +41,7 @@ export default function DispatchScreen({ id }: { id: string }) {
   const [feedback, setFeedback] = useState("");
   const [code, setCode] = useState("");
   const [validationState, setValidationState] = useState<
-    "idle" | "success" | "error"
+    "idle" | "success" | "serial-success" | "error"
   >("idle");
   const [retry, setRetry] = useState(0);
   const [predispatchSent, setPredispatchSent] = useState(false);
@@ -55,6 +55,26 @@ export default function DispatchScreen({ id }: { id: string }) {
   const [validationFlash] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
+    if (validationState === "serial-success") {
+      Animated.sequence([
+        Animated.timing(validationFlash, {
+          toValue: 1,
+          duration: 180,
+          useNativeDriver: false,
+        }),
+        Animated.timing(validationFlash, {
+          toValue: 2,
+          duration: 180,
+          useNativeDriver: false,
+        }),
+        Animated.timing(validationFlash, {
+          toValue: 0,
+          duration: 420,
+          useNativeDriver: false,
+        }),
+      ]).start();
+      return;
+    }
     if (validationState !== "success") return;
     Animated.sequence([
       Animated.timing(validationFlash, {
@@ -168,7 +188,10 @@ export default function DispatchScreen({ id }: { id: string }) {
         : await checkBarcode(order.id, targetItem.id, value);
       if (!mounted.current) return;
       setOrder(response.order);
-      setValidationState("success");
+      const responseHasSerial = "serial" in response && !!response.serial;
+      setValidationState(
+        !capturingSerial && responseHasSerial ? "serial-success" : "success",
+      );
       setCode("");
       if (capturingSerial) {
         const updatedItem = response.order.items.find(
@@ -385,30 +408,47 @@ export default function DispatchScreen({ id }: { id: string }) {
                   </View>
                 ) : order.items.length > 0 && !captureComplete ? (
                   <Animated.View
-                    className="gap-3.5 rounded-3xl border border-scanner-border bg-surface p-3"
+                    className="gap-3 rounded-3xl border border-scanner-border bg-surface p-3"
                     style={[
                       shadows.scanner,
                       {
                         backgroundColor:
                           validationState === "error"
                             ? colors.redLight
-                            : validationFlash.interpolate({
-                                inputRange: [0, 1],
-                                outputRange: [
-                                  colors.surface,
-                                  colors.secondaryLight,
-                                ],
-                              }),
+                            : validationFlash.interpolate(
+                                validationState === "serial-success"
+                                  ? {
+                                      inputRange: [0, 1, 2],
+                                      outputRange: [
+                                        serialMode
+                                          ? colors.scannerSerialLight
+                                          : colors.surface,
+                                        colors.scannerSerial,
+                                        colors.secondaryLight,
+                                      ],
+                                    }
+                                  : {
+                                      inputRange: [0, 1],
+                                      outputRange: [
+                                        serialMode
+                                          ? colors.scannerSerialLight
+                                          : colors.surface,
+                                        colors.secondaryLight,
+                                      ],
+                                    },
+                              ),
                         borderColor:
                           validationState === "error"
                             ? colors.red
-                            : colors.scannerBorder,
+                            : serialMode
+                              ? colors.scannerSerial
+                              : colors.scannerBorder,
                       },
                     ]}
                   >
                     {item ? (
                       <>
-                        <Text className="mt-px text-[21px] font-bold tracking-[-0.5px] text-ink">
+                        <Text className="mt-1 text-[21px] font-bold tracking-[-0.5px] text-ink">
                           {item.name}
                         </Text>
                         <Text className="-mt-2 text-[12px] text-muted">
@@ -416,15 +456,18 @@ export default function DispatchScreen({ id }: { id: string }) {
                           {item.quantity === 1 ? "unidad" : "unidades"}
                         </Text>
                       </>
-                    ) : (
-                      <Text className="text-muted"></Text>
-                    )}
+                    ) : null}
 
                     {!!camera.error && <Notice message={camera.error} />}
 
-                    <Text className="mt-0.5 text-[11px] font-bold tracking-[1.1px] text-muted">
-                      {serialMode ? "Esperando serial" : ""}
-                    </Text>
+                    {serialMode && (
+                      <Text
+                        className="mt-0.5 text-[11px] font-bold tracking-[1.1px]"
+                        style={{ color: colors.scannerSerial }}
+                      >
+                        Esperando serial
+                      </Text>
+                    )}
                     <TextInput
                       ref={inputRef}
                       accessibilityLabel={
@@ -437,11 +480,11 @@ export default function DispatchScreen({ id }: { id: string }) {
                       editable={!busy}
                       placeholder={
                         serialMode
-                          ? "Ej. MSV2200-24081"
+                          ? "Escanea el serial"
                           : "Escanea o escribe el código"
                       }
                       placeholderTextColor={colors.muted}
-                      className="-mt-[5px] min-h-[53px] rounded-[13px] border border-field bg-background px-3.5 py-[13px] text-[14px] text-ink"
+                      className=" mt-1 min-h-[53px] rounded-[13px] border border-field bg-background px-3.5 py-[13px] text-[14px] text-ink"
                       style={typography.numeric}
                       autoCorrect={false}
                       autoCapitalize="characters"
