@@ -192,7 +192,22 @@ test("no-serial list endpoint requests /api/dispatch/list", async () => {
 });
 
 test("barcodes in the no-serial list skip serial capture even when manjser is true", async () => {
-  const { client } = backendFixture([line], header, [` ${line.refbarra} `]);
+  let submitted: unknown;
+  const basePath = `/api/dispatch/orders/${header.prednum}/${header.pednum}`;
+  const adapter: AxiosAdapter = async (config) => {
+    let data: unknown;
+    if (config.method === "post" && config.url === "/api/dispatch/orders/predispatch") {
+      submitted = JSON.parse(String(config.data));
+      data = null;
+    } else if (config.method === "get") {
+      data = config.url === "/api/dispatch/list" ? [line.refbarra]
+        : config.url?.endsWith("/items") ? [line] : header;
+    } else {
+      throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+    }
+    return { data, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+  };
+  const client = createDispatchClient("https://api.example.test", adapter);
   const order = await client.getDispatchOrder("6242-19665");
   assert.equal(order.items[0].requiresSerial, false);
 
@@ -200,6 +215,14 @@ test("barcodes in the no-serial list skip serial capture even when manjser is tr
   assert.equal(result.serial, false);
   assert.equal(isItemComplete(result.order.items[0]), true);
   assert.equal(getCurrentItem(result.order), undefined);
+  const captureTime = result.order.items[0].horacapture;
+  assert.ok(captureTime);
+  assert.equal(Number.isNaN(Date.parse(captureTime)), false);
+
+  await client.submitPredispatch(result.order);
+  assert.ok(submitted && typeof submitted === "object" && "items" in submitted);
+  assert.ok(Array.isArray(submitted.items));
+  assert.equal(submitted.items[0].horacapture, captureTime);
 });
 
 test("item endpoint accepts the exact shared array and sends Accept application/json", async () => {

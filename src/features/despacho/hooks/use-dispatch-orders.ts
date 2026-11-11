@@ -1,8 +1,8 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 
-import type { BackendDispatchOrder } from "@/services/backend-dispatch";
 import { getDispatchOrders, getErrorMessage } from "@/features/despacho/services/dispatch-api";
+import type { BackendDispatchOrder } from "@/services/backend-dispatch";
 
 export function useDispatchOrders() {
   const [orders, setOrders] = useState<BackendDispatchOrder[]>([]);
