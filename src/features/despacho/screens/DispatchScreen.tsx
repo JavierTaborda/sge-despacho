@@ -533,13 +533,13 @@ export default function DispatchScreen({ id }: { id: string }) {
                       <Text className="text-[20px] font-bold text-ink">
                         {predispatchSent
                           ? "Predespacho enviado"
-                          : "Captura local completa"}
+                          : "Captura completa"}
                       </Text>
                     </View>
                     <Text className="text-[13px] leading-[21px] text-muted">
                       {predispatchSent
                         ? ""
-                        : "Completaste la captura en esta sesión. Envía los códigos y seriales para registrar el predespacho."}
+                        : "Todos los artículos están verificados. Envía los códigos y seriales para registrar el predespacho."}
                     </Text>
                     {!predispatchSent ? (
                       <Button

@@ -152,9 +152,10 @@ el contrato de consulta compartido:
   Se conserva exactamente el orden del array recibido; no se agrupan ni reordenan
   productos repetidos. `itemnum` identifica cada fila dentro de su despacho/pedido.
 - `refbarra` es la referencia esperada; `codbarra` es la captura existente, no un
-  reemplazo de la referencia. `serial1` conserva el valor existente, pero si el
-  código no está en la lista de códigos sin serial, se debe volver a escanear y
-  la nueva captura reemplaza ese valor.
+  reemplazo de la referencia. Si la fila requiere serial y `serial1` contiene
+  un valor no vacío, la unidad ya está lista: cuenta en el progreso y no se
+  vuelve a escanear. Un serial nulo, vacío o de solo espacios queda pendiente.
+  Los artículos sin serial siguen requiriendo un `codbarra` capturado.
   `lectura: "Sin serial"` por sí sola no prueba que la unidad haya sido capturada.
 - `cantdesp` se presenta como cantidad de despacho en la tarjeta de la lista,
   sin inferir un conteo de artículos ni progreso que el endpoint no proporciona.
@@ -192,7 +193,8 @@ Al configurar `EXPO_PUBLIC_API_URL`, la app consulta los datos reales y permite
 **capturarlos localmente** hasta pulsar el envío del predespacho:
 
 - Se debe escanear primero el código de barras, que se compara con `refbarra`.
-  Si `refbarra` no está en `/api/dispatch/list`, se solicita un serial para esa fila. Un `codbarra`
+  Si `refbarra` no está en `/api/dispatch/list`, se solicita un serial para esa fila,
+  salvo que ya tenga `serial1` informado por el backend. Un `codbarra`
   recibido del backend no autoriza por sí solo un nuevo intento de serial.
 - El lector tipo teclado puede validar automáticamente al completar una lectura
   de más de cuatro caracteres; **Enter** y el botón manual también funcionan.
@@ -206,8 +208,9 @@ Al configurar `EXPO_PUBLIC_API_URL`, la app consulta los datos reales y permite
   un serial puede repetirse en otro SKU o en otra orden. Si se rechaza un serial,
   se reintenta solo el serial sin repetir el código de barras.
 - Los borradores permanecen en memoria al volver a una orden durante la sesión.
-  **Se pierden al recargar/cerrar la app, salir o cambiar de usuario**;
-  no hay almacenamiento persistente de capturas.
+  **Las capturas locales no enviadas se pierden al recargar/cerrar la app, salir
+  o cambiar de usuario**; no hay almacenamiento persistente de capturas.
+  Los seriales recibidos del backend se reconocen de nuevo como listos al cargar.
   `getDispatchOrderItems` sigue devolviendo la respuesta del servidor, mientras
   `getDispatchOrder` devuelve el detalle con su borrador local si ya está cargado.
 - La pantalla avisa que las capturas no se han enviado. La lista conserva el
@@ -215,7 +218,8 @@ Al configurar `EXPO_PUBLIC_API_URL`, la app consulta los datos reales y permite
   Las órdenes finalizadas no admiten escaneo; si no hay ítems, no se puede confirmar.
 
 El serial se comprueba localmente, no contra un endpoint de validación.
-Tras completar todas las filas, **Enviar predespacho** hace
+Cuando todas las filas están listas, ya sea por capturas existentes del backend
+o por escaneos de esta sesión, **Enviar predespacho** hace
 `POST /api/dispatch/orders/predispatch` con los DTOs existentes. Los errores
 del servidor se muestran; no se simula éxito ni se marca la orden finalizada.
 `completeDispatch` continúa bloqueado porque no existe endpoint de finalización.

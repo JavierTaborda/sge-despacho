@@ -229,7 +229,7 @@ function mapItem(
     location: displayText(line.codalma, "Sin ubicación"),
     requiresSerial,
     barcodeChecked: !requiresSerial && !!line.codbarra?.trim(),
-    serials: serial && !requiresSerial ? [serial] : [],
+    serials: serial ? [serial] : [],
   };
 }
 

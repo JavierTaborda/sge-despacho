@@ -12,6 +12,7 @@ import {
     getCurrentItem,
     getOrderProgress,
     getOrderStatus,
+    getPendingSerialItem,
     isItemComplete,
     isOrderComplete,
 } from "../src/domain/dispatch.ts";
@@ -290,6 +291,39 @@ test("submits the complete predispatch payload with captured barcode and serial"
   assert.equal(barcodeResult.serial, true);
 });
 
+test("existing backend serials make the order ready to submit without rescanning", async () => {
+  const capturedLine = {
+    ...line,
+    codbarra: line.refbarra,
+    serial1: "EXISTING-SN",
+    horacapture: "2026-10-23 10:00:00",
+  };
+  let submitted: unknown;
+  const adapter: AxiosAdapter = async (config) => {
+    let data: unknown;
+    if (config.method === "post" && config.url === "/api/dispatch/orders/predispatch") {
+      submitted = JSON.parse(String(config.data));
+      data = null;
+    } else if (config.method === "get") {
+      data = config.url === "/api/dispatch/list" ? []
+        : config.url?.endsWith("/items") ? [capturedLine] : header;
+    } else {
+      throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+    }
+    return { data, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+  };
+  const client = createDispatchClient("https://api.example.test", adapter);
+  const order = await client.getDispatchOrder("6242-19665");
+  assert.equal(order.items.every(isItemComplete), true);
+  assert.equal(getCurrentItem(order), undefined);
+  assert.equal(getPendingSerialItem(order), undefined);
+  assert.deepEqual(getOrderProgress(order), { checked: 1, total: 1, percent: 100 });
+  assert.equal(isOrderComplete(order), false);
+
+  await client.submitPredispatch(order);
+  assert.deepEqual(submitted, { ...header, items: [capturedLine] });
+});
+
 test("item parser preserves duplicate products as distinct rows, order and null values", () => {
   const payload: BackendDispatchItem[] = [
     { ...line, itemnum: 7, artdes: null, refbarra: null, codbarra: null, serial1: null },
@@ -386,24 +420,31 @@ test("maps each API row as one unit and preserves exact server sequence", () => 
   assert.equal(getCurrentItem(order)?.itemnum, 7);
 });
 
-test("keeps existing serials visible but requires a fresh capture when serial is required", () => {
+test("counts existing serials as captured while leaving missing and blank serials pending", () => {
   const order = mapBackendDispatchDetail(header, params, [
-    { ...line, codbarra: "CAPTURADO", serial1: "SN-001", horacapture: "2026-10-23 10:00:00" },
+    { ...line, codbarra: "CAPTURADO", serial1: " SN-001 ", horacapture: "2026-10-23 10:00:00" },
     { ...line, itemnum: 2, codbarra: "7590020007163", serial1: null },
     { ...line, itemnum: 3, refbarra: null, codbarra: "NO-ES-REFERENCIA" },
+    { ...line, itemnum: 4, serial1: " \r\n " },
+    { ...line, itemnum: 5, serial1: "SN-005" },
   ]);
   assert.equal(order.items[0].barcode, "7590020007163");
   assert.equal(order.items[0].codbarra, "CAPTURADO");
-  assert.equal(order.items[0].serial1, "SN-001");
-  assert.deepEqual(order.items[0].serials, []);
+  assert.equal(order.items[0].serial1, " SN-001 ");
+  assert.deepEqual(order.items[0].serials, ["SN-001"]);
   assert.equal(order.items[0].horacapture, "2026-10-23 10:00:00");
   assert.equal(order.items[0].recouser, "operador01");
-  assert.equal(isItemComplete(order.items[0]), false);
+  assert.equal(isItemComplete(order.items[0]), true);
+  assert.equal(order.items[0].barcodeChecked, false);
   assert.equal(isItemComplete(order.items[1]), false);
   assert.equal(order.items[1].barcodeChecked, false);
   assert.equal(order.items[2].barcode, "");
-  assert.equal(getCurrentItem(order)?.itemnum, 1);
-  assert.equal(getOrderProgress(order).checked, 0);
+  assert.deepEqual(order.items[3].serials, []);
+  assert.equal(isItemComplete(order.items[3]), false);
+  assert.equal(isItemComplete(order.items[4]), true);
+  assert.equal(getCurrentItem(order)?.itemnum, 2);
+  assert.equal(getPendingSerialItem(order), undefined);
+  assert.deepEqual(getOrderProgress(order), { checked: 2, total: 5, percent: 40 });
 });
 
 test("no-serial list alone determines serial capture, and Sin serial is not a capture", () => {
@@ -637,35 +678,38 @@ test("concurrent detail loads do not overwrite a captured local serial with stal
   assert.equal((await secondLoad).items[0].serial1, "LOCAL-001");
 });
 
-test("fresh serial capture overwrites serial1 and rejects values used by other items", async () => {
+test("preserves existing serials and only captures pending items", async () => {
   const { client } = backendFixture([
     { ...line, serial1: "existing-sn", codbarra: line.refbarra },
-    { ...line, itemnum: 2, serial1: "other-existing-sn", codbarra: line.refbarra },
+    { ...line, itemnum: 2, codbarra: line.refbarra },
   ]);
   const order = await client.getDispatchOrder("6242-19665");
-  const current = order.items[0];
+  const [ready, current] = order.items;
+  assert.equal(isItemComplete(ready), true);
+  assert.deepEqual(ready.serials, ["existing-sn"]);
+  await assert.rejects(client.checkBarcode(order.id, ready.id, ready.barcode), /no está pendiente/);
+  await assert.rejects(client.checkSerial(order.id, ready.id, "REPLACEMENT-SN"), /no está pendiente/);
   assert.equal(getCurrentItem(order)?.id, current.id);
   assert.equal(current.codbarra, line.refbarra);
   assert.equal(current.barcodeChecked, false);
   assert.deepEqual(current.serials, []);
   await assert.rejects(client.checkSerial(order.id, current.id, "NEW-SN"), /Primero/);
   await client.checkBarcode(order.id, current.id, current.barcode);
-  await assert.rejects(client.checkSerial(order.id, current.id, "OTHER-EXISTING-SN"), /ya fue registrado/);
+  await assert.rejects(client.checkSerial(order.id, current.id, " EXISTING-SN "), /ya fue registrado/);
   await assert.rejects(client.checkSerial(order.id, current.id, " \r\n"), /escribe un serial/);
   const rejected = await client.getDispatchOrder(order.id);
-  assert.equal(rejected.items[0].barcodeChecked, true);
-  assert.deepEqual(rejected.items[0].serials, []);
+  assert.equal(rejected.items[1].barcodeChecked, true);
+  assert.deepEqual(rejected.items[1].serials, []);
   const captured = (await client.checkSerial(order.id, current.id, "NEW-SN")).order;
-  assert.equal(captured.items[0].serial1, "NEW-SN");
-  assert.deepEqual(captured.items[0].serials, ["NEW-SN"]);
-  assert.equal(getCurrentItem(captured)?.id, order.items[1].id);
-
-  await client.checkBarcode(order.id, order.items[1].id, order.items[1].barcode);
-  await assert.rejects(client.checkSerial(order.id, order.items[1].id, "NEW-SN"), /ya fue registrado/);
-  const accepted = (await client.checkSerial(order.id, order.items[1].id, "SECOND-NEW-SN")).order;
-  assert.equal(accepted.items[1].barcodeChecked, false);
-  assert.equal(accepted.items[1].serial1, "SECOND-NEW-SN");
-  assert.deepEqual(accepted.items[1].serials, ["SECOND-NEW-SN"]);
+  assert.equal(captured.items[0].serial1, "existing-sn");
+  assert.deepEqual(captured.items[0].serials, ["existing-sn"]);
+  assert.equal(captured.items[1].barcodeChecked, false);
+  assert.equal(captured.items[1].serial1, "NEW-SN");
+  assert.deepEqual(captured.items[1].serials, ["NEW-SN"]);
+  assert.equal(getCurrentItem(captured), undefined);
+  const reopened = await client.getDispatchOrder(order.id);
+  assert.deepEqual(getOrderProgress(reopened), { checked: 2, total: 2, percent: 100 });
+  assert.equal(isOrderComplete(reopened), false);
 });
 
 test("serials may repeat across different products but not within the same product", async () => {
