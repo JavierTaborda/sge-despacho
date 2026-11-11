@@ -165,7 +165,7 @@ export function createDispatchService(
       if (!order.items.length || !order.items.every(isItemComplete)) {
         throw new DispatchError("Debes validar todos los artículos y sus seriales.", 409);
       }
-      console.log(order);
+    
       const payload = {
         ...toBackendOrderHeader(order),
         cantdesp: order.cantdesp,
