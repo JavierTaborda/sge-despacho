@@ -338,8 +338,8 @@ export default function DispatchScreen({ id }: { id: string }) {
                 contentContainerClassName="gap-[18px] p-6 pb-[35px] pt-1.5"
               >
                 <View className="gap-2.5 rounded-[20px] border border-line bg-surface px-4 py-3.5">
-                  <View className="flex-row items-center gap-3">
-                    <View className="h-11 w-11 items-center justify-center rounded-[15px] bg-primary-light">
+                  <View className="flex-row items-center gap-2">
+                    <View className="h-10 w-10 items-center justify-center rounded-[15px] bg-primary-light">
                       <Icon name="scan" size={22} color={colors.primary} />
                     </View>
                     <View className="min-w-0 flex-1 gap-0.5">
@@ -356,11 +356,11 @@ export default function DispatchScreen({ id }: { id: string }) {
                       </Text>
                     </View>
                     <View className="items-end gap-0.5">
-                      <Text className="text-[17px] font-extrabold text-primary">
-                        {progress.percent}%
-                      </Text>
-                      <Text className="text-[9px] font-medium text-muted">
+                      <Text className="text-[20px] font-bold text-primary">
                         {progress.checked}/{progress.total}
+                      </Text>
+                      <Text className="text-[13px] font-semibold text-muted">
+                        {progress.percent}%
                       </Text>
                     </View>
                   </View>
@@ -377,7 +377,7 @@ export default function DispatchScreen({ id }: { id: string }) {
                       />
                     </View>
                     <Text className="text-center text-[28px] font-extrabold tracking-[-0.9px] text-ink">
-                      ¡Despacho listo!
+                      ¡Despacho Finalizado!
                     </Text>
                     <Text className="text-center text-[13px] leading-5 text-muted">
                       El backend informa que esta orden está finalizada.
@@ -568,15 +568,17 @@ export default function DispatchScreen({ id }: { id: string }) {
                 )} */}
 
                 <View className="mt-1 flex-row items-center justify-between">
-                  <Text className="text-[17px] font-bold tracking-[-0.3px] text-ink">
+                  <Text className="text-[16px] font-bold text-ink">
                     {orderCompleted
                       ? "Detalle de lo preparado"
                       : "Estado de los artículos"}
                   </Text>
-                  <Icon name="list-outline" size={20} color={colors.muted} />
+                  <Text className="text-[11px] font-semibold text-muted">
+                    {progress.checked}/{progress.total}
+                  </Text>
                 </View>
 
-                <View className="rounded-[20px] border border-line bg-surface px-4">
+                <View className="rounded-[16px] border border-line bg-surface px-3">
                   {!order.items.length && (
                     <Text className="py-[18px] text-[13px] text-muted">
                       El backend no devolvió artículos para esta orden.
@@ -588,12 +590,12 @@ export default function DispatchScreen({ id }: { id: string }) {
                     return (
                       <View
                         key={line.id}
-                        className={`flex-row items-start gap-[11px] py-[18px] ${
+                        className={`flex-row items-start gap-2.5 py-3 ${
                           index > 0 ? "border-t border-line" : ""
                         }`}
                       >
                         <View
-                          className={`h-[29px] w-[29px] items-center justify-center rounded-[10px] ${
+                          className={`mt-0.5 h-7 w-7 items-center justify-center rounded-[9px] ${
                             current
                               ? "bg-primary-light"
                               : done
@@ -619,61 +621,58 @@ export default function DispatchScreen({ id }: { id: string }) {
                             />
                           )}
                         </View>
-                        <View className="flex-1">
-                          <Text
-                            className={`text-[12px] font-semibold leading-[18px] ${
-                              !done && !current ? "text-muted" : "text-ink"
-                            }`}
-                          >
-                            {line.name}
-                          </Text>
-
-                          {!!line.codbarra && (
+                        <View className="min-w-0 flex-1 gap-1">
+                          <View className="flex-row items-start justify-between gap-2">
                             <Text
-                              selectable
-                              className="mt-[5px] text-[10px] leading-[15px] text-muted"
+                              className={`min-w-0 flex-1 text-[12px] font-semibold leading-[17px] ${
+                                !done && !current ? "text-muted" : "text-ink"
+                              }`}
                             >
-                              Código de barra: {line.codbarra}
+                              {line.name}
                             </Text>
-                          )}
-
+                            <Text
+                              className={`mt-0.5 text-[9px] font-bold ${
+                                done
+                                  ? "text-secondary"
+                                  : current
+                                    ? "text-primary-dark"
+                                    : "text-muted"
+                              }`}
+                            >
+                              {done
+                                ? "Cargado"
+                                : current
+                                  ? "Actual"
+                                  : "Pendiente"}
+                            </Text>
+                          </View>
                           <Text
                             selectable
-                            className="mt-[5px] text-[10px] leading-[15px] text-muted"
+                            className="text-[10px] leading-[14px] text-muted"
                           >
-                            Ref barra: {line.refbarra}
+                            {line.codbarra
+                              ? `Código: ${line.codbarra}  ·  `
+                              : ""}
+                            Ref: {line.refbarra}
                           </Text>
-
-                          {line.serials.length
-                            ? line.serials.map((serial) => (
-                                <Text
-                                  key={serial}
-                                  selectable
-                                  className="mt-[5px] text-[10px] text-secondary"
-                                >
-                                  Serial: {serial}
-                                </Text>
-                              ))
-                            : line.serial1 && (
-                                <Text
-                                  selectable
-                                  className="mt-[5px] text-[10px] text-muted"
-                                >
-                                  Serial previo: {line.serial1}
-                                </Text>
-                              )}
+                          {!!line.serials.length && (
+                            <Text
+                              selectable
+                              className="text-[10px] leading-[14px] text-secondary"
+                            >
+                              Serial{line.serials.length > 1 ? "es" : ""}:{" "}
+                              {line.serials.join(", ")}
+                            </Text>
+                          )}
+                          {!line.serials.length && !!line.serial1 && (
+                            <Text
+                              selectable
+                              className="text-[10px] leading-[14px] text-muted"
+                            >
+                              Serial previo: {line.serial1}
+                            </Text>
+                          )}
                         </View>
-                        <Text
-                          className={`mt-1 text-[9px] font-bold ${
-                            done
-                              ? "text-secondary"
-                              : current
-                                ? "text-primary-dark"
-                                : "text-muted"
-                          }`}
-                        >
-                          {done ? "Listo" : current ? "Actual" : "Pendiente"}
-                        </Text>
                       </View>
                     );
                   })}
