@@ -1,31 +1,41 @@
 import { router } from "expo-router";
-import { useEffect, useRef, useState, type ComponentRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  FlatList,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   Text,
   TextInput,
   View,
+  type ListRenderItemInfo,
   type TextInputInstance,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { Button, Icon, Notice, ProgressBar } from "@/components/ui";
+import {
+  Button,
+  ConfirmationModal,
+  Icon,
+  Notice,
+  ProgressBar,
+} from "@/components/ui";
 import { colors, shadows, typography } from "@/constants/theme";
 import {
   getOrderProgress,
   getPendingSerialItem,
   isItemComplete,
   isOrderComplete,
+  type DispatchItem,
   type DispatchOrder,
 } from "@/domain/dispatch";
+import { DispatchItemRow } from "@/features/despacho/components/DispatchItemRow";
 import {
   checkBarcode,
   checkSerial,
+  discardDispatchCaptures,
   getDispatchOrder,
   getErrorMessage,
   getErrorOrder,
@@ -45,9 +55,10 @@ export default function DispatchScreen({ id }: { id: string }) {
   >("idle");
   const [retry, setRetry] = useState(0);
   const [predispatchSent, setPredispatchSent] = useState(false);
+  const [cancelConfirmation, setCancelConfirmation] = useState(false);
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const inputRef = useRef<TextInputInstance>(null);
-  const scrollViewRef = useRef<ComponentRef<typeof ScrollView>>(null);
+  const listRef = useRef<FlatList<DispatchItem>>(null);
   const scanSubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refocusAfterScan = useRef(false);
   const requestInFlight = useRef(false);
@@ -134,33 +145,59 @@ export default function DispatchScreen({ id }: { id: string }) {
     if (!busy && refocusAfterScan.current) inputRef.current?.focus();
   }, [busy]);
 
-  const pendingSerialItem = order ? getPendingSerialItem(order) : undefined;
-  const barcodeItem =
-    order && code.trim()
-      ? order.items.find(
-          (line) => line.barcode === code.trim() && !isItemComplete(line),
-        )
-      : undefined;
+  const pendingSerialItem = useMemo(
+    () => (order ? getPendingSerialItem(order) : undefined),
+    [order],
+  );
+  const barcodeItems = useMemo(() => {
+    const pending = new Map<string, DispatchItem>();
+    for (const line of order?.items ?? []) {
+      if (!isItemComplete(line) && !pending.has(line.barcode))
+        pending.set(line.barcode, line);
+    }
+    return pending;
+  }, [order]);
+  const barcodeItem = code.trim() ? barcodeItems.get(code.trim()) : undefined;
   const item = pendingSerialItem ?? barcodeItem;
   const orderCompleted = !!order && isOrderComplete(order);
   const serialMode = !!pendingSerialItem;
-  const captureComplete =
-    !!order && order.items.length > 0 && order.items.every(isItemComplete);
-  const progress = order
-    ? getOrderProgress(order)
-    : { checked: 0, total: 0, percent: 0 };
+  const captureComplete = useMemo(
+    () =>
+      !!order && order.items.length > 0 && order.items.every(isItemComplete),
+    [order],
+  );
+  const progress = useMemo(
+    () =>
+      order ? getOrderProgress(order) : { checked: 0, total: 0, percent: 0 },
+    [order],
+  );
+  const currentItemId = item?.id;
+  const itemCount = order?.items.length ?? 0;
+  const renderItem = useCallback(
+    ({ item: line, index }: ListRenderItemInfo<DispatchItem>) => (
+      <DispatchItemRow
+        line={line}
+        index={index}
+        current={currentItemId === line.id}
+        last={index === itemCount - 1}
+      />
+    ),
+    [currentItemId, itemCount],
+  );
   async function submitScan(value: string) {
     if (scanSubmitTimer.current) {
       clearTimeout(scanSubmitTimer.current);
       scanSubmitTimer.current = null;
     }
-    if (requestInFlight.current || !order || orderCompleted) return;
-    const activeSerialItem = getPendingSerialItem(order);
-    const targetItem =
-      activeSerialItem ??
-      order.items.find(
-        (line) => line.barcode === value.trim() && !isItemComplete(line),
-      );
+    if (
+      requestInFlight.current ||
+      cancelConfirmation ||
+      !order ||
+      orderCompleted
+    )
+      return;
+    const activeSerialItem = pendingSerialItem;
+    const targetItem = activeSerialItem ?? barcodeItems.get(value.trim());
     if (!targetItem) {
       setError(
         "No encontramos un artículo pendiente con ese código de barras.",
@@ -232,6 +269,7 @@ export default function DispatchScreen({ id }: { id: string }) {
   }
 
   function handleCodeChange(value: string) {
+    if (cancelConfirmation || requestInFlight.current) return;
     setCode(value);
     if (error) setError("");
     if (validationState !== "idle") setValidationState("idle");
@@ -250,7 +288,7 @@ export default function DispatchScreen({ id }: { id: string }) {
   }
 
   const camera = useBarcodeScanner({
-    disabled: busy || !item || orderCompleted,
+    disabled: busy || cancelConfirmation || !item || orderCompleted,
     onScanned: (value) => {
       void submitScan(value);
     },
@@ -278,6 +316,44 @@ export default function DispatchScreen({ id }: { id: string }) {
   function goBack() {
     if (router.canGoBack()) router.back();
     else router.replace("/");
+  }
+
+  function requestCancellation() {
+    if (!order || orderCompleted || predispatchSent || requestInFlight.current)
+      return;
+    if (scanSubmitTimer.current) {
+      clearTimeout(scanSubmitTimer.current);
+      scanSubmitTimer.current = null;
+    }
+    setCancelConfirmation(true);
+  }
+
+  async function cancelDispatchCapture() {
+    if (!order || orderCompleted || predispatchSent || requestInFlight.current)
+      return;
+    requestInFlight.current = true;
+    refocusAfterScan.current = false;
+    setCancelConfirmation(false);
+    setBusy(true);
+    setError("");
+    try {
+      const reset = await discardDispatchCaptures(order.id);
+      if (!mounted.current) return;
+      setOrder(reset);
+      setCode("");
+      setFeedback("");
+      setValidationState("idle");
+      goBack();
+    } catch (reason) {
+      if (mounted.current) {
+        const latestOrder = getErrorOrder(reason);
+        if (latestOrder?.id === order.id) setOrder(latestOrder);
+        setError(getErrorMessage(reason));
+      }
+    } finally {
+      requestInFlight.current = false;
+      if (mounted.current) setBusy(false);
+    }
   }
 
   return (
@@ -327,363 +403,293 @@ export default function DispatchScreen({ id }: { id: string }) {
             </View>
           ) : (
             <>
-              <ScrollView
-                ref={scrollViewRef}
+              <FlatList
+                ref={listRef}
+                data={order.items}
+                keyExtractor={(line) => line.id}
+                renderItem={renderItem}
+                extraData={currentItemId}
+                initialNumToRender={8}
+                maxToRenderPerBatch={8}
+                windowSize={5}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
                 scrollEventThrottle={16}
                 onScroll={(event) => {
                   setShowScrollToTop(event.nativeEvent.contentOffset.y > 320);
                 }}
-                contentContainerClassName="gap-[18px] p-6 pb-[35px] pt-1.5"
-              >
-                <View className="gap-2.5 rounded-[20px] border border-line bg-surface px-4 py-3.5">
-                  <View className="flex-row items-center gap-2">
-                    <View className="h-10 w-10 items-center justify-center rounded-[15px] bg-primary-light">
-                      <Icon name="scan" size={22} color={colors.primary} />
-                    </View>
-                    <View className="min-w-0 flex-1 gap-0.5">
+                contentContainerClassName="p-6 pb-[35px] pt-1.5"
+                ListHeaderComponent={
+                  <View className="gap-[18px] pb-[18px]">
+                    <View className="gap-2.5 rounded-[20px] border border-line bg-surface px-4 py-3.5">
                       <View className="flex-row items-center gap-2">
-                        <Text className="text-[15px] font-extrabold text-ink">
-                          {order.prednum} · Pedido {order.pednum}
-                        </Text>
-                      </View>
-                      <Text
-                        numberOfLines={2}
-                        className="text-[12px] font-medium text-muted"
-                      >
-                        {order.customer}
-                      </Text>
-                    </View>
-                    <View className="items-end gap-0.5">
-                      <Text className="text-[20px] font-bold text-primary">
-                        {progress.checked}/{progress.total}
-                      </Text>
-                      <Text className="text-[13px] font-semibold text-muted">
-                        {progress.percent}%
-                      </Text>
-                    </View>
-                  </View>
-                  <ProgressBar percent={progress.percent} />
-                </View>
-
-                {orderCompleted ? (
-                  <View className="gap-4 rounded-3xl border border-success-border bg-surface p-6">
-                    <View className="h-[78px] w-[78px] items-center justify-center self-center rounded-full bg-secondary-light">
-                      <Icon
-                        name="checkmark-done"
-                        size={42}
-                        color={colors.secondary}
-                      />
-                    </View>
-                    <Text className="text-center text-[28px] font-extrabold tracking-[-0.9px] text-ink">
-                      ¡Despacho Finalizado!
-                    </Text>
-                    <Text className="text-center text-[13px] leading-5 text-muted">
-                      El backend informa que esta orden está finalizada.
-                    </Text>
-                    <View className="my-[5px] items-center gap-[7px] border-y border-dashed border-line py-5">
-                      <Text className="text-[9px] font-semibold tracking-[1.5px] text-muted">
-                        ESTADO DEL BACKEND: FINALIZADO
-                      </Text>
-                      <Text className="text-[18px] font-bold text-ink">
-                        Despacho {order.prednum} · Pedido {order.pednum}
-                      </Text>
-                      <Text className="text-[11px] text-muted">
-                        {order.fecfinalStr ||
-                          order.completedAt ||
-                          "Fecha de finalización no informada"}
-                      </Text>
-                      {!!order.duracion && (
-                        <Text className="text-[11px] text-muted">
-                          Duración: {order.duracion}
-                        </Text>
-                      )}
-                    </View>
-                    <Button
-                      title="Volver a mis órdenes"
-                      icon="arrow-forward"
-                      onPress={() => router.replace("/")}
-                    />
-                  </View>
-                ) : order.items.length > 0 && !captureComplete ? (
-                  <Animated.View
-                    className="gap-3 rounded-3xl border border-scanner-border bg-surface p-3"
-                    style={[
-                      shadows.scanner,
-                      {
-                        backgroundColor:
-                          validationState === "error"
-                            ? colors.redLight
-                            : validationFlash.interpolate(
-                                validationState === "serial-success"
-                                  ? {
-                                      inputRange: [0, 1, 2],
-                                      outputRange: [
-                                        serialMode
-                                          ? colors.scannerSerialLight
-                                          : colors.surface,
-                                        colors.scannerSerial,
-                                        colors.secondaryLight,
-                                      ],
-                                    }
-                                  : {
-                                      inputRange: [0, 1],
-                                      outputRange: [
-                                        serialMode
-                                          ? colors.scannerSerialLight
-                                          : colors.surface,
-                                        colors.secondaryLight,
-                                      ],
-                                    },
-                              ),
-                        borderColor:
-                          validationState === "error"
-                            ? colors.red
-                            : serialMode
-                              ? colors.scannerSerial
-                              : colors.scannerBorder,
-                      },
-                    ]}
-                  >
-                    {item ? (
-                      <>
-                        <Text className="mt-1 text-[21px] font-bold tracking-[-0.5px] text-ink">
-                          {item.name}
-                        </Text>
-                        <Text className="-mt-2 text-[12px] text-muted">
-                          {item.sku} · {item.quantity}{" "}
-                          {item.quantity === 1 ? "unidad" : "unidades"}
-                        </Text>
-                      </>
-                    ) : null}
-
-                    {!!camera.error && <Notice message={camera.error} />}
-
-                    {serialMode && (
-                      <Text
-                        className="mt-0.5 text-[11px] font-bold tracking-[1.1px]"
-                        style={{ color: colors.scannerSerial }}
-                      >
-                        Esperando serial
-                      </Text>
-                    )}
-                    <TextInput
-                      ref={inputRef}
-                      accessibilityLabel={
-                        serialMode
-                          ? "Serial del artículo"
-                          : "Código de barras del artículo"
-                      }
-                      value={code}
-                      onChangeText={handleCodeChange}
-                      editable={!busy}
-                      placeholder={
-                        serialMode
-                          ? "Escanea el serial"
-                          : "Escanea o escribe el código"
-                      }
-                      placeholderTextColor={colors.muted}
-                      className=" mt-1 min-h-[53px] rounded-[13px] border border-field bg-background px-3.5 py-[13px] text-[14px] text-ink"
-                      style={typography.numeric}
-                      autoCorrect={false}
-                      autoCapitalize="characters"
-                      autoComplete="off"
-                      spellCheck={false}
-                      autoFocus
-                      returnKeyType="send"
-                      submitBehavior="submit"
-                      onSubmitEditing={(event) => {
-                        void submitScan(event.nativeEvent.text);
-                      }}
-                    />
-                    {camera.permissionDenied && (
-                      <Text className="-mt-1 text-[10px] leading-4 text-muted">
-                        Activa el permiso de cámara en los ajustes para escanear
-                        desde este teléfono.
-                      </Text>
-                    )}
-
-                    {!!code.trim() && (
-                      <Button
-                        title={
-                          busy
-                            ? "Validando…"
-                            : serialMode
-                              ? "Capturar serial"
-                              : "Validar código"
-                        }
-                        icon="scan-outline"
-                        loading={busy}
-                        disabled={!code.trim()}
-                        onPress={() => {
-                          void submitScan(code);
-                        }}
-                      />
-                    )}
-                  </Animated.View>
-                ) : captureComplete ? (
-                  <View className="gap-4 rounded-[22px] border border-success-border bg-surface p-[22px]">
-                    <View className="flex-row items-center gap-[9px]">
-                      <Icon
-                        name="checkmark-circle"
-                        color={colors.secondary}
-                        size={26}
-                      />
-                      <Text className="text-[20px] font-bold text-ink">
-                        {predispatchSent
-                          ? "Predespacho enviado"
-                          : "Captura completa"}
-                      </Text>
-                    </View>
-                    <Text className="text-[13px] leading-[21px] text-muted">
-                      {predispatchSent
-                        ? ""
-                        : "Todos los artículos están verificados. Envía los códigos y seriales para registrar el predespacho."}
-                    </Text>
-                    {!predispatchSent ? (
-                      <Button
-                        title="Enviar predespacho"
-                        icon="checkmark-done-outline"
-                        loading={busy}
-                        onPress={() => {
-                          void confirmDispatch();
-                        }}
-                      />
-                    ) : (
-                      <Button
-                        title="Volver a mis órdenes"
-                        icon="arrow-back"
-                        onPress={goBack}
-                      />
-                    )}
-                  </View>
-                ) : (
-                  <Notice message="El backend no devolvió artículos para capturar en esta orden." />
-                )}
-
-                {!!error && <Notice message={error} />}
-                {/* {!!feedback && !orderCompleted && (
-                  <Notice message={feedback} success />
-                )} */}
-
-                <View className="mt-1 flex-row items-center justify-between">
-                  <Text className="text-[16px] font-bold text-ink">
-                    {orderCompleted
-                      ? "Detalle de lo preparado"
-                      : "Estado de los artículos"}
-                  </Text>
-                  <Text className="text-[11px] font-semibold text-muted">
-                    {progress.checked}/{progress.total}
-                  </Text>
-                </View>
-
-                <View className="rounded-[16px] border border-line bg-surface px-3">
-                  {!order.items.length && (
-                    <Text className="py-[18px] text-[13px] text-muted">
-                      El backend no devolvió artículos para esta orden.
-                    </Text>
-                  )}
-                  {order.items.map((line, index) => {
-                    const done = isItemComplete(line);
-                    const current = item?.id === line.id;
-                    return (
-                      <View
-                        key={line.id}
-                        className={`flex-row items-start gap-2.5 py-3 ${
-                          index > 0 ? "border-t border-line" : ""
-                        }`}
-                      >
-                        <View
-                          className={`mt-0.5 h-7 w-7 items-center justify-center rounded-[9px] ${
-                            current
-                              ? "bg-primary-light"
-                              : done
-                                ? "bg-secondary-light"
-                                : "bg-background"
-                          }`}
-                        >
-                          {done ? (
-                            <Icon
-                              name="checkmark"
-                              size={17}
-                              color={colors.secondary}
-                            />
-                          ) : current ? (
-                            <Text className="text-[12px] font-bold text-primary-dark">
-                              {index + 1}
-                            </Text>
-                          ) : (
-                            <Icon
-                              name="barcode-outline"
-                              color={colors.muted}
-                              size={14}
-                            />
-                          )}
+                        <View className="h-10 w-10 items-center justify-center rounded-[15px] bg-primary-light">
+                          <Icon name="scan" size={22} color={colors.primary} />
                         </View>
-                        <View className="min-w-0 flex-1 gap-1">
-                          <View className="flex-row items-start justify-between gap-2">
-                            <Text
-                              className={`min-w-0 flex-1 text-[12px] font-semibold leading-[17px] ${
-                                !done && !current ? "text-muted" : "text-ink"
-                              }`}
-                            >
-                              {line.name}
-                            </Text>
-                            <Text
-                              className={`mt-0.5 text-[9px] font-bold ${
-                                done
-                                  ? "text-secondary"
-                                  : current
-                                    ? "text-primary-dark"
-                                    : "text-muted"
-                              }`}
-                            >
-                              {done
-                                ? "Cargado"
-                                : current
-                                  ? "Actual"
-                                  : "Pendiente"}
+                        <View className="min-w-0 flex-1 gap-0.5">
+                          <View className="flex-row items-center gap-2">
+                            <Text className="text-[15px] font-extrabold text-ink">
+                              {order.prednum} · Pedido {order.pednum}
                             </Text>
                           </View>
                           <Text
-                            selectable
-                            className="text-[10px] leading-[14px] text-muted"
+                            numberOfLines={2}
+                            className="text-[12px] font-medium text-muted"
                           >
-                            {line.codbarra
-                              ? `Código: ${line.codbarra}  ·  `
-                              : ""}
-                            Ref: {line.refbarra}
+                            {order.customer}
                           </Text>
-                          {!!line.serials.length && (
-                            <Text
-                              selectable
-                              className="text-[10px] leading-[14px] text-secondary"
-                            >
-                              Serial{line.serials.length > 1 ? "es" : ""}:{" "}
-                              {line.serials.join(", ")}
-                            </Text>
-                          )}
-                          {!line.serials.length && !!line.serial1 && (
-                            <Text
-                              selectable
-                              className="text-[10px] leading-[14px] text-muted"
-                            >
-                              Serial previo: {line.serial1}
+                        </View>
+                        <View className="items-end gap-0.5">
+                          <Text className="text-[20px] font-bold text-primary">
+                            {progress.checked}/{progress.total}
+                          </Text>
+                          <Text className="text-[13px] font-semibold text-muted">
+                            {progress.percent}%
+                          </Text>
+                        </View>
+                      </View>
+                      <ProgressBar percent={progress.percent} />
+                    </View>
+                    {/* 
+                        {!orderCompleted && !predispatchSent && (
+                          <Button
+                            title="Cancelar despacho"
+                            icon="close-circle-outline"
+                            secondary
+                            disabled={busy}
+                            onPress={requestCancellation}
+                          />
+                        )} */}
+
+                    {orderCompleted ? (
+                      <View className="gap-4 rounded-3xl border border-success-border bg-surface p-6">
+                        <View className="h-[78px] w-[78px] items-center justify-center self-center rounded-full bg-secondary-light">
+                          <Icon
+                            name="checkmark-done"
+                            size={42}
+                            color={colors.secondary}
+                          />
+                        </View>
+                        <Text className="text-center text-[28px] font-extrabold tracking-[-0.9px] text-ink">
+                          ¡Despacho Finalizado!
+                        </Text>
+                        <Text className="text-center text-[13px] leading-5 text-muted">
+                          El backend informa que esta orden está finalizada.
+                        </Text>
+                        <View className="my-[5px] items-center gap-[7px] border-y border-dashed border-line py-5">
+                          <Text className="text-[9px] font-semibold tracking-[1.5px] text-muted">
+                            ESTADO DEL BACKEND: FINALIZADO
+                          </Text>
+                          <Text className="text-[18px] font-bold text-ink">
+                            Despacho {order.prednum} · Pedido {order.pednum}
+                          </Text>
+                          <Text className="text-[11px] text-muted">
+                            {order.fecfinalStr ||
+                              order.completedAt ||
+                              "Fecha de finalización no informada"}
+                          </Text>
+                          {!!order.duracion && (
+                            <Text className="text-[11px] text-muted">
+                              Duración: {order.duracion}
                             </Text>
                           )}
                         </View>
+                        <Button
+                          title="Volver a mis órdenes"
+                          icon="arrow-forward"
+                          onPress={() => router.replace("/")}
+                        />
                       </View>
-                    );
-                  })}
-                </View>
-              </ScrollView>
+                    ) : order.items.length > 0 && !captureComplete ? (
+                      <Animated.View
+                        className="gap-3 rounded-3xl border border-scanner-border bg-surface p-3"
+                        style={[
+                          shadows.scanner,
+                          {
+                            backgroundColor:
+                              validationState === "error"
+                                ? colors.redLight
+                                : validationFlash.interpolate(
+                                    validationState === "serial-success"
+                                      ? {
+                                          inputRange: [0, 1, 2],
+                                          outputRange: [
+                                            serialMode
+                                              ? colors.scannerSerialLight
+                                              : colors.surface,
+                                            colors.scannerSerial,
+                                            colors.secondaryLight,
+                                          ],
+                                        }
+                                      : {
+                                          inputRange: [0, 1],
+                                          outputRange: [
+                                            serialMode
+                                              ? colors.scannerSerialLight
+                                              : colors.surface,
+                                            colors.secondaryLight,
+                                          ],
+                                        },
+                                  ),
+                            borderColor:
+                              validationState === "error"
+                                ? colors.red
+                                : serialMode
+                                  ? colors.scannerSerial
+                                  : colors.scannerBorder,
+                          },
+                        ]}
+                      >
+                        {item ? (
+                          <>
+                            <Text className="mt-1 text-[21px] font-bold tracking-[-0.5px] text-ink">
+                              {item.name}
+                            </Text>
+                            <Text className="-mt-2 text-[12px] text-muted">
+                              {item.sku} · {item.quantity}{" "}
+                              {item.quantity === 1 ? "unidad" : "unidades"}
+                            </Text>
+                          </>
+                        ) : null}
+
+                        {!!camera.error && <Notice message={camera.error} />}
+
+                        {serialMode && (
+                          <Text
+                            className="mt-0.5 text-[11px] font-bold tracking-[1.1px]"
+                            style={{ color: colors.scannerSerial }}
+                          >
+                            Esperando serial
+                          </Text>
+                        )}
+                        <TextInput
+                          ref={inputRef}
+                          accessibilityLabel={
+                            serialMode
+                              ? "Serial del artículo"
+                              : "Código de barras del artículo"
+                          }
+                          value={code}
+                          onChangeText={handleCodeChange}
+                          editable={!busy}
+                          placeholder={
+                            serialMode
+                              ? "Escanea el serial"
+                              : "Escanea o escribe el código"
+                          }
+                          placeholderTextColor={colors.muted}
+                          className=" mt-1 min-h-[53px] rounded-[13px] border border-field bg-background px-3.5 py-[13px] text-[14px] text-ink"
+                          style={typography.numeric}
+                          autoCorrect={false}
+                          autoCapitalize="characters"
+                          autoComplete="off"
+                          spellCheck={false}
+                          autoFocus
+                          returnKeyType="send"
+                          submitBehavior="submit"
+                          onSubmitEditing={(event) => {
+                            void submitScan(event.nativeEvent.text);
+                          }}
+                        />
+                        {camera.permissionDenied && (
+                          <Text className="-mt-1 text-[10px] leading-4 text-muted">
+                            Activa el permiso de cámara en los ajustes para
+                            escanear desde este teléfono.
+                          </Text>
+                        )}
+
+                        {!!code.trim() && (
+                          <Button
+                            title={
+                              busy
+                                ? "Validando…"
+                                : serialMode
+                                  ? "Capturar serial"
+                                  : "Validar código"
+                            }
+                            icon="scan-outline"
+                            loading={busy}
+                            disabled={!code.trim()}
+                            onPress={() => {
+                              void submitScan(code);
+                            }}
+                          />
+                        )}
+                      </Animated.View>
+                    ) : captureComplete ? (
+                      <View className="gap-4 rounded-[22px] border border-success-border bg-surface p-[22px]">
+                        <View className="flex-row items-center gap-[9px]">
+                          <Icon
+                            name="checkmark-circle"
+                            color={colors.secondary}
+                            size={26}
+                          />
+                          <Text className="text-[20px] font-bold text-ink">
+                            {predispatchSent
+                              ? "Predespacho enviado"
+                              : "Captura completa"}
+                          </Text>
+                        </View>
+                        <Text className="text-[13px] leading-[21px] text-muted">
+                          {predispatchSent
+                            ? ""
+                            : "Todos los artículos están verificados. Envía los códigos y seriales para registrar el predespacho."}
+                        </Text>
+                        {!predispatchSent ? (
+                          <Button
+                            title="Enviar predespacho"
+                            icon="checkmark-done-outline"
+                            loading={busy}
+                            onPress={() => {
+                              void confirmDispatch();
+                            }}
+                          />
+                        ) : (
+                          <Button
+                            title="Volver a mis órdenes"
+                            icon="arrow-back"
+                            onPress={goBack}
+                          />
+                        )}
+                      </View>
+                    ) : (
+                      <Notice message="El backend no devolvió artículos para capturar en esta orden." />
+                    )}
+
+                    {!!error && <Notice message={error} />}
+                    {/* {!!feedback && !orderCompleted && (
+                  <Notice message={feedback} success />
+                )} */}
+
+                    <View className="mt-1 flex-row items-center justify-between">
+                      <Text className="text-[16px] font-bold text-ink">
+                        {orderCompleted
+                          ? "Detalle de lo preparado"
+                          : "Estado de los artículos"}
+                      </Text>
+                      <Text className="text-[11px] font-semibold text-muted">
+                        {progress.checked}/{progress.total}
+                      </Text>
+                    </View>
+                  </View>
+                }
+                ListEmptyComponent={
+                  <View className="rounded-[16px] border border-line bg-surface px-3">
+                    <Text className="py-[18px] text-[13px] text-muted">
+                      El backend no devolvió artículos para esta orden.
+                    </Text>
+                  </View>
+                }
+              />
               {showScrollToTop && (
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Volver arriba"
                   onPress={() =>
-                    scrollViewRef.current?.scrollTo({ y: 0, animated: true })
+                    listRef.current?.scrollToOffset({
+                      offset: 0,
+                      animated: true,
+                    })
                   }
                   className="absolute bottom-5 right-5 z-10 h-12 w-12 items-center justify-center rounded-full bg-primary shadow-lg"
                 >
@@ -694,6 +700,15 @@ export default function DispatchScreen({ id }: { id: string }) {
           )}
         </View>
       </KeyboardAvoidingView>
+      <ConfirmationModal
+        visible={cancelConfirmation}
+        title="¿Descartar las capturas de este despacho?"
+        message="Se restablecerán los códigos y seriales locales y volverás a la lista. Se conservarán las capturas del servidor; la orden no se cancela en el backend."
+        confirmTitle="Descartar capturas"
+        cancelTitle="Seguir capturando"
+        onConfirm={() => void cancelDispatchCapture()}
+        onCancel={() => setCancelConfirmation(false)}
+      />
     </SafeAreaView>
   );
 }

@@ -1,33 +1,76 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 
-import { getDispatchOrders, getErrorMessage } from "@/features/despacho/services/dispatch-api";
+import {
+  getDispatchOrders,
+  getErrorMessage,
+  hasLocalCaptures,
+  refreshDispatchOrders,
+} from "@/features/despacho/services/dispatch-api";
 import type { BackendDispatchOrder } from "@/services/backend-dispatch";
 
 export function useDispatchOrders() {
   const [orders, setOrders] = useState<BackendDispatchOrder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshConfirmation, setRefreshConfirmation] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"open" | "completed">("open");
   const requestCounter = useRef(0);
+  const checkingRefresh = useRef(false);
 
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (refresh = false) => {
     const requestId = ++requestCounter.current;
     setLoading(true);
+    setRefreshing(refresh);
     setError("");
 
     try {
-      const data = await getDispatchOrders();
+      const data = await (refresh ? refreshDispatchOrders() : getDispatchOrders());
       if (requestId === requestCounter.current) setOrders(data);
     } catch (reason: unknown) {
       if (requestId === requestCounter.current) {
         setError(getErrorMessage(reason));
       }
     } finally {
-      if (requestId === requestCounter.current) setLoading(false);
+      if (requestId === requestCounter.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
+
+  const refreshOrders = useCallback(async () => {
+    if (checkingRefresh.current || loading || refreshConfirmation) return;
+    checkingRefresh.current = true;
+    const requestId = requestCounter.current;
+    setRefreshing(true);
+    try {
+      const needsConfirmation = await hasLocalCaptures();
+      if (requestId !== requestCounter.current) return;
+      if (needsConfirmation) {
+        setRefreshing(false);
+        setRefreshConfirmation(true);
+      } else {
+        await loadOrders(true);
+      }
+    } catch (reason) {
+      if (requestId === requestCounter.current) {
+        setRefreshing(false);
+        setError(getErrorMessage(reason));
+      }
+    } finally {
+      checkingRefresh.current = false;
+    }
+  }, [loadOrders, loading, refreshConfirmation]);
+
+  const confirmRefresh = useCallback(() => {
+    setRefreshConfirmation(false);
+    return loadOrders(true);
+  }, [loadOrders]);
+
+  const cancelRefresh = useCallback(() => setRefreshConfirmation(false), []);
 
   useFocusEffect(
     useCallback(() => {
@@ -61,6 +104,10 @@ export function useDispatchOrders() {
     orders,
     visibleOrders,
     loading,
+    refreshing,
+    refreshConfirmation,
+    confirmRefresh,
+    cancelRefresh,
     error,
     search,
     setSearch,
@@ -70,5 +117,6 @@ export function useDispatchOrders() {
     pending,
     dispatchQuantity,
     loadOrders,
+    refreshOrders,
   };
 }

@@ -34,11 +34,16 @@ import {
     getErrorOrder,
     normalizeBackendUrl,
 } from "../src/services/dispatch-api.ts";
+import {
+  createDispatchDraftStorage,
+  type DraftKeyValueStorage,
+} from "../src/features/despacho/services/dispatch-draft-storage.ts";
 
 function scopedFixture() {
   let epoch = 0;
   const adapter: AxiosAdapter = async (config) => ({
     data: config.url === "/api/dispatch/list" ? []
+      : config.url === "/api/dispatch/orders" ? [header]
       : config.url?.endsWith("/items") ? [line] : header,
     status: 200, statusText: "OK", headers: new AxiosHeaders(), config,
   });
@@ -99,6 +104,7 @@ function backendFixture(
   items: BackendDispatchItem[],
   orderHeader = header,
   noSerialBarcodes: string[] = [],
+  options?: Parameters<typeof createDispatchService>[1],
 ) {
   const requests: string[] = [];
   const basePath = `/api/dispatch/orders/${orderHeader.prednum}/${orderHeader.pednum}`;
@@ -113,7 +119,22 @@ function backendFixture(
     else throw new Error(`Unexpected request: ${config.url}`);
     return { data, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
   };
-  return { client: createDispatchClient("https://api.example.test/api", adapter), requests };
+  return {
+    client: options
+      ? createDispatchService(create({ adapter }), options)
+      : createDispatchClient("https://api.example.test/api", adapter),
+    requests,
+  };
+}
+
+function memoryDraftStorage() {
+  const values = new Map<string, string>();
+  const storage: DraftKeyValueStorage = {
+    getItem: async (key) => values.get(key) ?? null,
+    setItem: async (key, value) => { values.set(key, value); },
+    removeItem: async (key) => { values.delete(key); },
+  };
+  return { values, storage, drafts: createDispatchDraftStorage(storage) };
 }
 
 test("list endpoint returns the exact shared header shape without items or a wrapper", async () => {
@@ -678,6 +699,658 @@ test("local drafts survive returning to the detail but not a new app session", a
   assert.equal(getOrderProgress(reloaded).checked, 0);
 });
 
+test("discarding local captures resets codes, serials and pending authorization without changing server captures", async () => {
+  const { client, requests } = backendFixture([
+    line,
+    { ...line, itemnum: 2, refbarra: "NO-SERIAL" },
+    { ...line, itemnum: 3 },
+    { ...line, itemnum: 4, codbarra: line.refbarra, serial1: "SERVER-SN" },
+    { ...line, itemnum: 5, refbarra: "SERVER-FREE", codbarra: "SERVER-FREE" },
+  ], header, ["NO-SERIAL", "SERVER-FREE"]);
+  const original = await client.getDispatchOrder("6242-19665");
+  await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  await client.checkSerial(original.id, original.items[0].id, "LOCAL-SN");
+  await client.checkBarcode(original.id, original.items[1].id, original.items[1].barcode);
+  await client.checkBarcode(original.id, original.items[2].id, original.items[2].barcode);
+  requests.length = 0;
+
+  const reset = await client.discardDispatchCaptures(original.id);
+  assert.deepEqual(reset, original);
+  assert.deepEqual(await client.getDispatchOrder(original.id), original);
+  assert.equal(getPendingSerialItem(reset), undefined);
+  assert.equal(getOrderProgress(reset).checked, 2);
+  assert.equal(await client.hasLocalCaptures(), false);
+  assert.deepEqual(requests, []);
+  await assert.rejects(client.checkSerial(reset.id, reset.items[0].id, "LOCAL-SN"), /Primero/);
+  await client.checkBarcode(reset.id, reset.items[0].id, reset.items[0].barcode);
+  const recaptured = await client.checkSerial(reset.id, reset.items[0].id, "LOCAL-SN");
+  assert.equal(recaptured.order.items[0].serial1, "LOCAL-SN");
+});
+
+test("discarding one persistent order leaves other orders' drafts intact after reopening", async () => {
+  const { storage, values } = memoryDraftStorage();
+  const otherHeader = { ...header, pednum: 19666 };
+  const adapter: AxiosAdapter = async (config) => {
+    assert.equal(config.method, "get");
+    const orderHeader = config.url?.includes("/6242/19666") ? otherHeader : header;
+    const data = config.url === "/api/dispatch/list" ? []
+      : config.url?.endsWith("/items") ? [{ ...line, pednum: orderHeader.pednum }] : orderHeader;
+    return { data, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+  };
+  const newClient = () => createDispatchService(create({ adapter }), {
+    draftStorage: createDispatchDraftStorage(storage),
+    getDraftOwner: () => "operator-a",
+  });
+  const client = newClient();
+  const first = await client.getDispatchOrder("6242-19665");
+  const second = await client.getDispatchOrder("6242-19666");
+  for (const [order, serial] of [[first, "LOCAL-A"], [second, "LOCAL-B"]] as const) {
+    await client.checkBarcode(order.id, order.items[0].id, order.items[0].barcode);
+    await client.checkSerial(order.id, order.items[0].id, serial);
+  }
+  await client.discardDispatchCaptures(first.id);
+
+  const reopened = newClient();
+  assert.equal((await reopened.getDispatchOrder(first.id)).items[0].serial1, null);
+  assert.equal((await reopened.getDispatchOrder(second.id)).items[0].serial1, "LOCAL-B");
+  assert.equal(await reopened.hasLocalCaptures(), true);
+  await reopened.discardDispatchCaptures(second.id);
+  assert.equal(values.size, 0);
+  assert.equal(await newClient().hasLocalCaptures(), false);
+});
+
+test("failed persistent discard reports the error and can retry the saved draft removal", async () => {
+  const { storage, drafts, values } = memoryDraftStorage();
+  const { client } = backendFixture([line], header, [], {
+    draftStorage: drafts, getDraftOwner: () => "operator-a",
+  });
+  const original = await client.getDispatchOrder("6242-19665");
+  await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  await client.checkSerial(original.id, original.items[0].id, "LOCAL-SN");
+  const remove = storage.removeItem;
+  storage.removeItem = async () => { throw new Error("Disk unavailable"); };
+
+  await assert.rejects(client.discardDispatchCaptures(original.id), (error: unknown) => {
+    assert.match(getErrorMessage(error), /No pudimos guardar/);
+    assert.deepEqual(getErrorOrder(error), original);
+    return true;
+  });
+  assert.equal(values.size, 1);
+  assert.ok(drafts.status.getState().error);
+  storage.removeItem = remove;
+  const retry = drafts.status.getState().retry;
+  assert.ok(retry);
+  await retry();
+  assert.equal(values.size, 0);
+  const { client: reopened } = backendFixture([line], header, [], {
+    draftStorage: createDispatchDraftStorage(storage), getDraftOwner: () => "operator-a",
+  });
+  assert.equal(await reopened.hasLocalCaptures(), false);
+});
+
+test("discarding captures waits for an ongoing refresh and restores its latest server values", async () => {
+  let releaseItems: (() => void) | undefined;
+  const delayedItems = new Promise<void>((resolve) => { releaseItems = resolve; });
+  let itemRequests = 0;
+  const serverItem = { ...line };
+  const adapter: AxiosAdapter = async (config) => {
+    const isItems = config.url?.endsWith("/items");
+    if (isItems && ++itemRequests === 2) await delayedItems;
+    const data = config.url === "/api/dispatch/orders" ? [header]
+      : config.url === "/api/dispatch/list" ? [] : isItems ? [serverItem] : header;
+    return { data, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+  };
+  const client = createDispatchClient("https://api.example.test", adapter);
+  const original = await client.getDispatchOrder("6242-19665");
+  await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  await client.checkSerial(original.id, original.items[0].id, "LOCAL-SN");
+  serverItem.serial1 = "SERVER-FRESH";
+  const refresh = client.refreshDispatchOrders();
+  const cancel = client.discardDispatchCaptures(original.id);
+  assert.ok(releaseItems);
+  releaseItems();
+  const [, reset] = await Promise.all([refresh, cancel]);
+
+  assert.equal(reset.items[0].serial1, "SERVER-FRESH");
+  assert.deepEqual(reset.items[0].serials, ["SERVER-FRESH"]);
+  assert.equal(await client.hasLocalCaptures(), false);
+});
+
+test("discarding captures rejects unknown or finalized orders", async () => {
+  const { client } = backendFixture(
+    [{ ...line, serial1: "SERVER-SN" }], { ...header, conformado: "Finalizado" },
+  );
+  await assert.rejects(client.discardDispatchCaptures("6242-19665"), { status: 404 });
+  const original = await client.getDispatchOrder("6242-19665");
+  await assert.rejects(client.discardDispatchCaptures(original.id), { status: 409 });
+  assert.deepEqual(await client.getDispatchOrder(original.id), original);
+});
+
+test("persistent drafts restore completed captures and pending serials after reopening the app", async () => {
+  const { storage, drafts } = memoryDraftStorage();
+  const serverHeader = { ...header };
+  const serverItems = [
+    { ...line },
+    { ...line, itemnum: 2, refbarra: "NO-SERIAL" },
+    { ...line, itemnum: 3 },
+    { ...line, itemnum: 4, serial1: "SERVER-SN" },
+  ];
+  const options = { draftStorage: drafts, getDraftOwner: () => "operator-a" };
+  const { client } = backendFixture(serverItems, serverHeader, ["NO-SERIAL"], options);
+  const original = await client.getDispatchOrder("6242-19665");
+  assert.equal(await client.hasLocalCaptures(), false);
+  await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  const captured = (await client.checkSerial(original.id, original.items[0].id, "LOCAL-SN")).order;
+  await client.checkBarcode(original.id, original.items[1].id, original.items[1].barcode);
+  await client.checkBarcode(original.id, original.items[2].id, original.items[2].barcode);
+
+  const { client: reopened, requests } = backendFixture(
+    serverItems, serverHeader, ["NO-SERIAL"],
+    { ...options, draftStorage: createDispatchDraftStorage(storage) },
+  );
+  assert.equal(await reopened.hasLocalCaptures(), true);
+  const restored = await reopened.getDispatchOrder(original.id);
+  assert.equal(restored.items[0].serial1, "LOCAL-SN");
+  assert.equal(restored.items[0].horacapture, captured.items[0].horacapture);
+  assert.equal(isItemComplete(restored.items[1]), true);
+  assert.equal(getPendingSerialItem(restored)?.itemnum, 3);
+  assert.deepEqual(requests, []);
+
+  serverHeader.Cliente = "CLIENTE ACTUALIZADO";
+  serverItems[3].serial1 = null;
+  await reopened.refreshDispatchOrders();
+  const { client: reopenedAgain } = backendFixture(serverItems, serverHeader, ["NO-SERIAL"], {
+    ...options, draftStorage: createDispatchDraftStorage(storage),
+  });
+  const refreshed = await reopenedAgain.getDispatchOrder(original.id);
+  assert.equal(refreshed.customer, "CLIENTE ACTUALIZADO");
+  assert.equal(refreshed.items[0].serial1, "LOCAL-SN");
+  assert.equal(refreshed.items[3].serial1, null);
+  assert.equal(getPendingSerialItem(refreshed)?.itemnum, 3);
+  const continued = await reopenedAgain.checkSerial(original.id, restored.items[2].id, "CONTINUED-SN");
+  assert.equal(continued.order.items[2].serial1, "CONTINUED-SN");
+});
+
+test("5000-item drafts stay compact and preserve captures, refresh and cancellation after reopening", async () => {
+  const { storage, drafts, values } = memoryDraftStorage();
+  const items = Array.from({ length: 5000 }, (_, index) => ({
+    ...line, itemnum: index + 1, rennum: index + 1,
+    refbarra: String(1000000000000 + index),
+  }));
+  items[0].serial1 = "SERVER-SN";
+  const noSerial = [items[2500].refbarra];
+  const options = { draftStorage: drafts, getDraftOwner: () => "operator-a" };
+  const { client } = backendFixture(items, header, noSerial, options);
+  const original = await client.getDispatchOrder("6242-19665");
+  const last = original.items[4999];
+  await client.checkBarcode(original.id, last.id, last.barcode);
+  await client.checkSerial(original.id, last.id, "LOCAL-LAST-SN");
+  await client.checkBarcode(original.id, original.items[2500].id, original.items[2500].barcode);
+  await client.checkBarcode(original.id, original.items[4998].id, original.items[4998].barcode);
+  const bytes = Buffer.byteLength([...values.values()][0], "utf8");
+  assert.ok(bytes < 1024 * 1024, `A sparse 5000-item draft used ${bytes} bytes`);
+
+  const { client: reopened } = backendFixture(items, header, noSerial, {
+    ...options, draftStorage: createDispatchDraftStorage(storage),
+  });
+  const restored = await reopened.getDispatchOrder(original.id);
+  assert.deepEqual(restored.items.map((item) => item.id), original.items.map((item) => item.id));
+  assert.equal(restored.items[0].serial1, "SERVER-SN");
+  assert.equal(restored.items[4999].serial1, "LOCAL-LAST-SN");
+  assert.equal(getOrderProgress(restored).checked, 3);
+  assert.equal(getPendingSerialItem(restored)?.itemnum, 4999);
+  assert.deepEqual(restored.items[1234], original.items[1234]);
+  await reopened.refreshDispatchOrders();
+  const { client: refreshed } = backendFixture(items, header, noSerial, {
+    ...options, draftStorage: createDispatchDraftStorage(storage),
+  });
+  const continued = await refreshed.checkSerial(original.id, restored.items[4998].id, "RESUMED-SN");
+  assert.equal(continued.order.items[4998].serial1, "RESUMED-SN");
+  assert.equal(continued.order.items[4999].serial1, "LOCAL-LAST-SN");
+  const reset = await refreshed.discardDispatchCaptures(original.id);
+  assert.deepEqual(reset, original);
+  assert.equal(values.size, 0);
+});
+
+test("legacy persistent drafts resume pending serials and migrate without losing the server baseline", async () => {
+  const { storage, values } = memoryDraftStorage();
+  const key = "sge-despacho:drafts:v1:operator-a";
+  values.set(key, JSON.stringify({
+    version: 1,
+    drafts: [{
+      original: { header, items: [line], noSerialBarcodes: [], pendingSerialIds: [] },
+      captured: {
+        header, items: [{ ...line, codbarra: line.refbarra }],
+        noSerialBarcodes: [], pendingSerialIds: ["6242-19665-1"],
+      },
+    }],
+  }));
+  const options = {
+    getDraftOwner: () => "operator-a", draftStorage: createDispatchDraftStorage(storage),
+  };
+  const { client } = backendFixture([line], header, [], options);
+  const restored = await client.getDispatchOrder("6242-19665");
+  assert.equal(getPendingSerialItem(restored)?.id, restored.items[0].id);
+  const captured = (await client.checkSerial(restored.id, restored.items[0].id, "MIGRATED-SN")).order;
+  const { client: reopened } = backendFixture([line], header, [], {
+    ...options, draftStorage: createDispatchDraftStorage(storage),
+  });
+  assert.deepEqual(await reopened.getDispatchOrder(restored.id), captured);
+  const reset = await reopened.discardDispatchCaptures(restored.id);
+  assert.equal(reset.items[0].serial1, null);
+  assert.equal(reset.items[0].codbarra, null);
+  assert.equal(values.size, 0);
+});
+
+test("invalid compact captures are reported without overwriting the persistent draft", async () => {
+  const validCapture = [1, line.refbarra, null, null, true];
+  for (const invalidCaptures of [
+    [validCapture, validCapture],
+    [[999, line.refbarra, null, null, true]],
+    [[1, null, null, null, true]],
+  ]) {
+    const { drafts, storage, values } = memoryDraftStorage();
+    const options = { getDraftOwner: () => "operator-a", draftStorage: drafts };
+    const { client } = backendFixture([line], header, [], options);
+    const order = await client.getDispatchOrder("6242-19665");
+    await client.checkBarcode(order.id, order.items[0].id, order.items[0].barcode);
+    const key = [...values.keys()][0];
+    const saved: { drafts: { captures: unknown[] }[] } = JSON.parse(values.get(key)!);
+    saved.drafts[0].captures = invalidCaptures;
+    const invalid = JSON.stringify(saved);
+    values.set(key, invalid);
+    const restoredStorage = createDispatchDraftStorage(storage);
+    const { client: reopened } = backendFixture([line], header, [], {
+      ...options, draftStorage: restoredStorage,
+    });
+    await assert.rejects(reopened.getDispatchOrder(order.id), /No pudimos restaurar tus capturas/);
+    assert.ok(restoredStorage.status.getState().error);
+    assert.equal(values.get(key), invalid);
+  }
+});
+
+test("server-only captures do not create persistent drafts or require refresh confirmation", async () => {
+  const { values, drafts } = memoryDraftStorage();
+  const { client } = backendFixture([{ ...line, serial1: "SERVER-SN" }], header, [], {
+    draftStorage: drafts, getDraftOwner: () => "operator-a",
+  });
+  await client.getDispatchOrder("6242-19665");
+  assert.equal(await client.hasLocalCaptures(), false);
+  assert.equal(values.size, 0);
+});
+
+test("storage write failures retain the capture in memory, report it and allow retry", async () => {
+  const { storage, values, drafts } = memoryDraftStorage();
+  const { client } = backendFixture([line], header, [], {
+    draftStorage: drafts, getDraftOwner: () => "operator-a",
+  });
+  const original = await client.getDispatchOrder("6242-19665");
+  const write = storage.setItem;
+  storage.setItem = async () => { throw new Error("Disk unavailable"); };
+  await assert.rejects(
+    client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode),
+    (error: unknown) => {
+      assert.match(getErrorMessage(error), /No pudimos guardar/);
+      assert.equal(getErrorOrder(error)?.items[0].barcodeChecked, true);
+      return true;
+    },
+  );
+  assert.equal(values.size, 0);
+  assert.match(drafts.status.getState().error ?? "", /antes de cerrar la app/);
+  assert.equal(await client.hasLocalCaptures(), true);
+
+  storage.setItem = write;
+  const retry = drafts.status.getState().retry;
+  assert.ok(retry);
+  await retry();
+  assert.equal(drafts.status.getState().error, null);
+  const { client: reopened } = backendFixture([line], header, [], {
+    draftStorage: createDispatchDraftStorage(storage), getDraftOwner: () => "operator-a",
+  });
+  assert.equal(getPendingSerialItem(await reopened.getDispatchOrder(original.id))?.id, original.items[0].id);
+});
+
+test("a stale storage retry cannot overwrite a more recent successful capture", async () => {
+  const { storage, drafts } = memoryDraftStorage();
+  const options = { draftStorage: drafts, getDraftOwner: () => "operator-a" };
+  const { client } = backendFixture([line], header, [], options);
+  const original = await client.getDispatchOrder("6242-19665");
+  const write = storage.setItem;
+  storage.setItem = async () => { throw new Error("Disk unavailable"); };
+  await assert.rejects(
+    client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode),
+    /No pudimos guardar/,
+  );
+  const staleRetry = drafts.status.getState().retry;
+  assert.ok(staleRetry);
+  storage.setItem = write;
+  await client.checkSerial(original.id, original.items[0].id, "NEWER-SN");
+  await staleRetry();
+
+  const { client: reopened } = backendFixture([line], header, [], {
+    ...options, draftStorage: createDispatchDraftStorage(storage),
+  });
+  assert.equal((await reopened.getDispatchOrder(original.id)).items[0].serial1, "NEWER-SN");
+});
+
+test("invalid saved data is reported without overwriting it and restoration can be retried", async () => {
+  const { storage, values, drafts } = memoryDraftStorage();
+  const options = { draftStorage: drafts, getDraftOwner: () => "operator-a" };
+  const { client } = backendFixture([line], header, [], options);
+  const original = await client.getDispatchOrder("6242-19665");
+  await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  const [[key, saved]] = [...values];
+  values.set(key, "invalid-json");
+
+  const newStorage = createDispatchDraftStorage(storage);
+  const { client: reopened, requests } = backendFixture([line], header, [], {
+    ...options, draftStorage: newStorage,
+  });
+  await assert.rejects(reopened.getDispatchOrder(original.id), /No pudimos restaurar/);
+  assert.equal(values.get(key), "invalid-json");
+  assert.deepEqual(requests, []);
+  values.set(key, saved);
+  assert.equal(await reopened.hasLocalCaptures(), true);
+  assert.equal(newStorage.status.getState().error, null);
+});
+
+test("persistent drafts are isolated by user and logout removes the previous user's data", async () => {
+  const { drafts } = memoryDraftStorage();
+  let owner = "operator-a";
+  let epoch = 0;
+  const { client } = backendFixture([line], header, [], {
+    draftStorage: drafts, getDraftOwner: () => owner, getSessionScope: () => epoch,
+  });
+  const original = await client.getDispatchOrder("6242-19665");
+  await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  await client.checkSerial(original.id, original.items[0].id, "PRIVATE-SN");
+  owner = "operator-b";
+  epoch++;
+  client.clearCaptures();
+  await drafts.clear("operator-a");
+
+  assert.equal(await client.hasLocalCaptures(), false);
+  assert.equal((await client.getDispatchOrder(original.id)).items[0].serial1, null);
+  assert.deepEqual(await drafts.load("operator-a"), []);
+});
+
+test("logout cleanup is queued after pending writes so they cannot restore deleted drafts", async () => {
+  const { storage, drafts, values } = memoryDraftStorage();
+  let owner: string | null = "operator-a";
+  let epoch = 0;
+  const { client } = backendFixture([line], header, [], {
+    draftStorage: drafts, getDraftOwner: () => owner, getSessionScope: () => epoch,
+  });
+  const original = await client.getDispatchOrder("6242-19665");
+  let releaseWrite: (() => void) | undefined;
+  let startedWrite: (() => void) | undefined;
+  const blocked = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  const started = new Promise<void>((resolve) => { startedWrite = resolve; });
+  const write = storage.setItem;
+  storage.setItem = async (key, value) => {
+    startedWrite?.();
+    await blocked;
+    await write(key, value);
+  };
+  const pending = client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  await started;
+  owner = null;
+  epoch++;
+  client.clearCaptures();
+  const cleanup = drafts.clear("operator-a");
+  assert.ok(releaseWrite);
+  releaseWrite();
+  await Promise.all([pending, cleanup]);
+  assert.equal(values.size, 0);
+});
+
+test("a draft restoration from an old session cannot repopulate the new user's cache", async () => {
+  const { storage, drafts } = memoryDraftStorage();
+  const { client: initial } = backendFixture([line], header, [], {
+    draftStorage: drafts, getDraftOwner: () => "operator-a",
+  });
+  const original = await initial.getDispatchOrder("6242-19665");
+  await initial.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  let owner = "operator-a";
+  let epoch = 0;
+  let releaseRead: (() => void) | undefined;
+  let startedRead: (() => void) | undefined;
+  const blocked = new Promise<void>((resolve) => { releaseRead = resolve; });
+  const started = new Promise<void>((resolve) => { startedRead = resolve; });
+  const read = storage.getItem;
+  storage.getItem = async (key) => {
+    startedRead?.();
+    await blocked;
+    return read(key);
+  };
+  const { client } = backendFixture([line], header, [], {
+    draftStorage: drafts, getDraftOwner: () => owner, getSessionScope: () => epoch,
+  });
+  const pending = client.getDispatchOrder(original.id);
+  const rejected = assert.rejects(pending, /La sesión cambió/);
+  await started;
+  owner = "operator-b";
+  epoch++;
+  client.clearCaptures();
+  assert.ok(releaseRead);
+  releaseRead();
+  await rejected;
+  assert.equal(await client.hasLocalCaptures(), false);
+});
+
+test("successful submission clears persistent drafts and cleanup failures never repeat the POST", async () => {
+  const { storage, drafts, values } = memoryDraftStorage();
+  let posts = 0;
+  const adapter: AxiosAdapter = async (config) => {
+    if (config.method === "post") posts++;
+    const data = config.url === "/api/dispatch/list" ? []
+      : config.url?.endsWith("/items") ? [line] : header;
+    return { data, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+  };
+  const client = createDispatchService(create({ adapter }), {
+    draftStorage: drafts, getDraftOwner: () => "operator-a",
+  });
+  const original = await client.getDispatchOrder("6242-19665");
+  await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  const captured = await client.checkSerial(original.id, original.items[0].id, "LOCAL-SN");
+  assert.equal(values.size, 1);
+  const remove = storage.removeItem;
+  storage.removeItem = async () => { throw new Error("Disk unavailable"); };
+  await client.submitPredispatch(captured.order);
+  assert.equal(posts, 1);
+  assert.equal(await client.hasLocalCaptures(), false);
+  assert.match(drafts.status.getState().error ?? "", /El predespacho ya se envió/);
+  storage.removeItem = remove;
+  const retry = drafts.status.getState().retry;
+  assert.ok(retry);
+  await retry();
+  assert.equal(values.size, 0);
+  assert.equal(posts, 1);
+  assert.equal(drafts.status.getState().error, null);
+});
+
+test("full refresh updates server data and serial rules while preserving only local captures", async () => {
+  const serverHeader = { ...header };
+  const serverItems = [
+    { ...line },
+    { ...line, itemnum: 2 },
+    { ...line, itemnum: 3, refbarra: "NO-SERIAL" },
+    { ...line, itemnum: 4, serial1: "OLD-SERVER" },
+    { ...line, itemnum: 5 },
+  ];
+  const noSerialBarcodes = ["NO-SERIAL"];
+  const { client, requests } = backendFixture(serverItems, serverHeader, noSerialBarcodes);
+  const original = await client.getDispatchOrder("6242-19665");
+  await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  const captured = (await client.checkSerial(original.id, original.items[0].id, "LOCAL-SN")).order;
+  await client.checkBarcode(original.id, original.items[2].id, original.items[2].barcode);
+  await client.checkBarcode(original.id, original.items[1].id, original.items[1].barcode);
+
+  serverHeader.Cliente = "CLIENTE ACTUALIZADO";
+  serverHeader.cantdesp = 12;
+  serverItems[0].Articulo = "DESCRIPCIÓN ACTUALIZADA";
+  serverItems[0].codalma = "0002";
+  serverItems[3].serial1 = "NEW-SERVER";
+  serverItems.splice(4, 1, { ...line, itemnum: 6, refbarra: "NEW-NO-SERIAL" });
+  noSerialBarcodes.push("NEW-NO-SERIAL");
+  requests.length = 0;
+
+  assert.deepEqual(await client.refreshDispatchOrders(), [serverHeader]);
+  const refreshed = await client.getDispatchOrder(original.id);
+  assert.equal(refreshed.customer, "CLIENTE ACTUALIZADO");
+  assert.equal(refreshed.cantdesp, 12);
+  assert.equal(refreshed.items[0].name, "DESCRIPCIÓN ACTUALIZADA");
+  assert.equal(refreshed.items[0].location, "0002");
+  assert.equal(refreshed.items[0].serial1, "LOCAL-SN");
+  assert.deepEqual(refreshed.items[0].serials, ["LOCAL-SN"]);
+  assert.equal(refreshed.items[0].horacapture, captured.items[0].horacapture);
+  assert.equal(getPendingSerialItem(refreshed)?.itemnum, 2);
+  assert.equal(refreshed.items[2].codbarra, "NO-SERIAL");
+  assert.equal(isItemComplete(refreshed.items[2]), true);
+  assert.equal(refreshed.items[3].serial1, "NEW-SERVER");
+  assert.equal(refreshed.items[4].itemnum, 6);
+  assert.equal(refreshed.items[4].requiresSerial, false);
+  assert.deepEqual(requests.sort(), [
+    "get /api/dispatch/list",
+    "get /api/dispatch/orders",
+    "get /api/dispatch/orders/6242/19665",
+    "get /api/dispatch/orders/6242/19665/items",
+  ]);
+
+  serverItems[3].serial1 = null;
+  serverHeader.conformado = "Finalizado";
+  await client.refreshDispatchOrders();
+  const finalized = await client.getDispatchOrder(original.id);
+  assert.equal(finalized.conformado, "Finalizado");
+  assert.equal(finalized.items[0].serial1, "LOCAL-SN");
+  assert.equal(finalized.items[3].serial1, null);
+  assert.deepEqual(finalized.items[3].serials, []);
+  await assert.rejects(
+    client.checkBarcode(finalized.id, finalized.items[1].id, finalized.items[1].barcode),
+    /ya fue despachada/,
+  );
+});
+
+test("refresh reloads every cached order and shares a single no-serial request", async () => {
+  const headers = [header, { ...header, prednum: 6243, pednum: 19666 }];
+  const requests: string[] = [];
+  const adapter: AxiosAdapter = async (config) => {
+    requests.push(`${config.method} ${config.url}`);
+    const order = headers.find((entry) =>
+      config.url?.startsWith(`/api/dispatch/orders/${entry.prednum}/${entry.pednum}`),
+    );
+    const data = config.url === "/api/dispatch/orders" ? headers
+      : config.url === "/api/dispatch/list" ? []
+      : order && config.url?.endsWith("/items")
+        ? [{ ...line, prednum: order.prednum, pednum: order.pednum }] : order;
+    return { data, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+  };
+  const client = createDispatchClient("https://api.example.test", adapter);
+  for (const order of headers) await client.getDispatchOrder(getBackendOrderId(order));
+  headers[1] = { ...headers[1], Cliente: "OTRO CLIENTE ACTUALIZADO" };
+  requests.length = 0;
+
+  assert.deepEqual(await client.refreshDispatchOrders(), headers);
+  assert.equal((await client.getDispatchOrder("6243-19666")).customer, "OTRO CLIENTE ACTUALIZADO");
+  assert.equal(requests.filter((request) => request === "get /api/dispatch/list").length, 1);
+  assert.equal(requests.length, 6);
+});
+
+test("refresh handles an empty list without requesting unopened details", async () => {
+  const requests: string[] = [];
+  const adapter: AxiosAdapter = async (config) => {
+    requests.push(`${config.method} ${config.url}`);
+    return { data: [], status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+  };
+  const client = createDispatchClient("https://api.example.test", adapter);
+  assert.deepEqual(await client.refreshDispatchOrders(), []);
+  assert.deepEqual(requests.sort(), ["get /api/dispatch/list", "get /api/dispatch/orders"]);
+});
+
+test("failed refresh reports errors, retains drafts and can be retried", async () => {
+  const serverHeader = { ...header };
+  const serverItems = [{ ...line }];
+  const { client } = backendFixture(serverItems, serverHeader);
+  const original = await client.getDispatchOrder("6242-19665");
+  await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  await client.checkSerial(original.id, original.items[0].id, "LOCAL-SN");
+  serverHeader.Cliente = "CLIENTE ACTUALIZADO";
+  serverItems.push({ ...line });
+
+  await assert.rejects(client.refreshDispatchOrders(), /itemnum duplicado/);
+  const retained = await client.getDispatchOrder(original.id);
+  assert.equal(retained.customer, header.Cliente);
+  assert.equal(retained.items[0].serial1, "LOCAL-SN");
+  serverItems.pop();
+  await client.refreshDispatchOrders();
+  const retried = await client.getDispatchOrder(original.id);
+  assert.equal(retried.customer, "CLIENTE ACTUALIZADO");
+  assert.equal(retried.items[0].serial1, "LOCAL-SN");
+});
+
+test("refresh refuses to discard captures when their item is removed or replaced", async () => {
+  for (const replacement of [[], [{ ...line, refbarra: "REPLACEMENT" }]]) {
+    const serverItems = [{ ...line }];
+    const { client } = backendFixture(serverItems);
+    const original = await client.getDispatchOrder("6242-19665");
+    await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+    await client.checkSerial(original.id, original.items[0].id, "LOCAL-SN");
+    serverItems.splice(0, serverItems.length, ...replacement);
+
+    await assert.rejects(client.refreshDispatchOrders(), /cambió en el servidor/);
+    assert.equal((await client.getDispatchOrder(original.id)).items[0].serial1, "LOCAL-SN");
+  }
+});
+
+test("overlapping refreshes share requests and detail reads wait for updated data", async () => {
+  let releaseItems: (() => void) | undefined;
+  const delayedItems = new Promise<void>((resolve) => { releaseItems = resolve; });
+  let itemRequests = 0;
+  const serverHeader = { ...header };
+  const adapter: AxiosAdapter = async (config) => {
+    const isItems = config.url?.endsWith("/items");
+    if (isItems && ++itemRequests === 2) await delayedItems;
+    const data = config.url === "/api/dispatch/orders" ? [serverHeader]
+      : config.url === "/api/dispatch/list" ? [] : isItems ? [line] : serverHeader;
+    return { data, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+  };
+  const client = createDispatchClient("https://api.example.test", adapter);
+  const original = await client.getDispatchOrder("6242-19665");
+  serverHeader.Cliente = "CLIENTE ACTUALIZADO";
+  const firstRefresh = client.refreshDispatchOrders();
+  const secondRefresh = client.refreshDispatchOrders();
+  const reopened = client.getDispatchOrder(original.id);
+  assert.ok(releaseItems);
+  releaseItems();
+
+  await Promise.all([firstRefresh, secondRefresh]);
+  assert.equal((await reopened).customer, "CLIENTE ACTUALIZADO");
+  assert.equal(itemRequests, 2);
+});
+
+test("a detail request started before refresh cannot restore stale cached data", async () => {
+  let releaseItems: (() => void) | undefined;
+  const delayedItems = new Promise<void>((resolve) => { releaseItems = resolve; });
+  let itemRequests = 0;
+  const serverHeader = { ...header };
+  const adapter: AxiosAdapter = async (config) => {
+    const isItems = config.url?.endsWith("/items");
+    const data = config.url === "/api/dispatch/orders" ? [{ ...serverHeader }]
+      : config.url === "/api/dispatch/list" ? [] : isItems ? [line] : { ...serverHeader };
+    if (isItems && ++itemRequests === 1) await delayedItems;
+    return { data, status: 200, statusText: "OK", headers: new AxiosHeaders(), config };
+  };
+  const client = createDispatchClient("https://api.example.test", adapter);
+  const pending = client.getDispatchOrder("6242-19665");
+  const rejected = assert.rejects(pending, /Los datos se actualizaron/);
+  serverHeader.Cliente = "CLIENTE ACTUALIZADO";
+  await client.refreshDispatchOrders();
+  assert.ok(releaseItems);
+  releaseItems();
+  await rejected;
+  assert.equal((await client.getDispatchOrder("6242-19665")).customer, "CLIENTE ACTUALIZADO");
+});
+
 test("concurrent detail loads do not overwrite a captured local serial with stale data", async () => {
   let releaseItems: (() => void) | undefined;
   const delayedItems = new Promise<void>((resolve) => { releaseItems = resolve; });
@@ -866,4 +1539,17 @@ test("an in-flight detail from an old session cannot repopulate cleared capture 
   await assert.rejects(client.checkBarcode("6242-19665", "6242-19665-1", line.refbarra!), /No encontramos/);
   const order = await client.getDispatchOrder("6242-19665");
   assert.deepEqual(order.items[0].serials, []);
+});
+
+test("an in-flight refresh cannot restore another session's data or captures", async () => {
+  const { client, changeSession } = scopedFixture();
+  const original = await client.getDispatchOrder("6242-19665");
+  await client.checkBarcode(original.id, original.items[0].id, original.items[0].barcode);
+  await client.checkSerial(original.id, original.items[0].id, "LOCAL-SN");
+  const pending = client.refreshDispatchOrders();
+  changeSession();
+  client.clearCaptures();
+
+  await assert.rejects(pending, /La sesión cambió/);
+  assert.equal((await client.getDispatchOrder(original.id)).items[0].serial1, null);
 });

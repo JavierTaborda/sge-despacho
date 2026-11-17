@@ -32,6 +32,54 @@ export interface DispatchOrderParams {
   pednum: number;
 }
 
+export function toBackendOrderHeader(order: DispatchOrder): BackendDispatchOrder {
+  return {
+    prednum: order.prednum,
+    pednum: order.pednum,
+    conformado: order.conformado,
+    fecdesp: order.fecdesp,
+    fecfinalStr: order.fecfinalStr,
+    fecfinal: order.fecfinal,
+    duracion: order.duracion,
+    co_cli: order.codcli,
+    Cliente: order.customer,
+    co_zon: order.codzon,
+    Zona: order.address,
+    co_ven: order.codven,
+    Vendedor: order.vendedor,
+    cantdesp: order.cantdesp,
+    owneruser: String(order.owneruser),
+    supervisor: order.supervisor || null,
+  };
+}
+
+export function toBackendItem(item: DispatchItem): BackendDispatchItem {
+  return {
+    prednum: item.prednum,
+    pednum: item.pednum,
+    itemnum: item.itemnum,
+    rennum: item.rennum,
+    codalma: item.codalma,
+    codart: item.codart,
+    artdes: item.artdes,
+    Articulo: item.Articulo,
+    refbarra: item.refbarra,
+    compuesto: item.compuesto,
+    manjser: item.manjser,
+    codbarra: item.codbarra,
+    serial1: item.serial1,
+    recouser: item.recouser,
+    supervisor: item.supervisor,
+    horacapture: item.horacapture,
+    changed: item.changed,
+    selected: item.selected,
+    objectstate: item.objectstate,
+    objecticon: item.objecticon,
+    lectura: item.lectura,
+    objectstate2: item.objectstate2,
+  };
+}
+
 export interface DispatchApi {
   listOrders: {
     method: "GET";

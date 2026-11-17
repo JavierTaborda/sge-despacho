@@ -43,8 +43,9 @@ cambiar variables. En producción usa HTTPS; HTTP local se permite en desarrollo
 
 Los errores de configuración, restauración, login y logout son visibles.
 Un logout fallido no simula éxito. Salir o cambiar de usuario borra las capturas
-en memoria y remonta las pantallas; respuestas pendientes de otra sesión no
-pueden repoblar la caché. Renovar el token del mismo usuario conserva el avance.
+en memoria y del almacenamiento local, y remonta las pantallas; respuestas
+pendientes de otra sesión no pueden repoblar la caché. Renovar el token del mismo
+usuario conserva el avance. Cerrar la app sin cerrar sesión conserva las capturas.
 
 Las variables `EXPO_PUBLIC_*` son visibles en el bundle. Nunca uses una clave
 `service_role`. RLS y la API deben validar identidad, permisos y escrituras;
@@ -58,7 +59,15 @@ JWTs para conceder permisos. Detalles en la
 [el hook `useDispatchOrders`](./src/features/despacho/hooks/use-dispatch-orders.ts):
 
 1. Al entrar o volver a la pantalla, carga las órdenes desde el servicio.
-   `loadOrders()` permite recargarlas al deslizar o reintentar.
+   `loadOrders()` recarga la lista. Al deslizar o reintentar, `refreshOrders()`
+   también consulta los detalles ya abiertos y los códigos sin serial. El
+   indicador permanece activo hasta terminar, incluso si la lista está vacía.
+   Los detalles aún no abiertos se consultan al entrar, como en la carga inicial.
+   Si hay capturas locales sin enviar, se pide **Confirmar actualización** o
+   **Cancelar** antes de consultar nuevamente al servidor; confirmar no las descarta.
+   Se conservan las capturas locales no enviadas, no los datos antiguos del
+   servidor. Si un artículo capturado desaparece o cambia de producto/referencia,
+   se muestra un error y se conservan los datos anteriores para no perder capturas.
 2. Expone `loading` y `error` para mostrar la carga y los errores. Un contador
    evita que respuestas antiguas o recibidas después de salir cambien el estado.
 3. `search` / `setSearch` y `filter` / `setFilter` controlan la búsqueda por
@@ -207,9 +216,28 @@ Al configurar `EXPO_PUBLIC_API_URL`, la app consulta los datos reales y permite
   seriales vacíos, los que empiezan por `759` y los repetidos para el mismo SKU;
   un serial puede repetirse en otro SKU o en otra orden. Si se rechaza un serial,
   se reintenta solo el serial sin repetir el código de barras.
-- Los borradores permanecen en memoria al volver a una orden durante la sesión.
-  **Las capturas locales no enviadas se pierden al recargar/cerrar la app, salir
-  o cambiar de usuario**; no hay almacenamiento persistente de capturas.
+- Los borradores se guardan tras cada captura en **AsyncStorage** en móvil y
+  **localStorage** en web, separados por usuario. Se restauran al recargar o
+  cerrar/abrir la app con la misma sesión, incluido un barcode cuyo serial aún
+  esté pendiente. Solo se guardan órdenes con cambios locales, junto con su
+  referencia original para poder actualizar los demás datos del servidor.
+  **Cerrar sesión o cambiar de usuario borra sus borradores locales**.
+  Este almacenamiento no está cifrado y no contiene tokens ni contraseñas.
+  Los errores de lectura, escritura y limpieza se muestran en un aviso con
+  reintento; una captura no se anuncia como guardada si falla la escritura.
+  Tras enviar correctamente un predespacho, sus capturas dejan de ser borradores.
+- El detalle virtualiza las filas con `FlatList`: no monta todos los artículos
+  al abrir una orden grande. Los cálculos de progreso se memorizan y las búsquedas
+  del escáner y la combinación del refresco usan índices para evitar búsquedas
+  anidadas. El guardado conserva una sola referencia compacta del servidor y
+  únicamente las capturas modificadas, no dos copias completas de la orden.
+  Los borradores del formato anterior siguen siendo legibles y se convierten
+  al nuevo formato al guardar la siguiente captura o actualización.
+- **Cancelar despacho** pide confirmación y descarta únicamente las capturas
+  locales de esa orden: restablece códigos, seriales y autorizaciones pendientes
+  al estado del servidor, elimina su borrador guardado y vuelve a la lista.
+  No afecta otras órdenes ni cancela o modifica el despacho en el backend.
+  No está disponible para órdenes finalizadas o tras enviar el predespacho.
   Los seriales recibidos del backend se reconocen de nuevo como listos al cargar.
   `getDispatchOrderItems` sigue devolviendo la respuesta del servidor, mientras
   `getDispatchOrder` devuelve el detalle con su borrador local si ya está cargado.

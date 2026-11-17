@@ -2,6 +2,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import type { ComponentProps, ReactNode } from "react";
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   Text,
   View,
@@ -69,6 +70,42 @@ export function Button({
         {title}
       </Text>
     </Pressable>
+  );
+}
+
+export function ConfirmationModal({
+  visible,
+  title,
+  message,
+  confirmTitle,
+  cancelTitle = "Cancelar",
+  onConfirm,
+  onCancel,
+}: {
+  visible: boolean;
+  title: string;
+  message: string;
+  confirmTitle: string;
+  cancelTitle?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View className="flex-1 items-center justify-center bg-dark/60 px-6">
+        <View
+          accessibilityViewIsModal
+          className="w-full max-w-content gap-4 rounded-3xl bg-surface p-6"
+        >
+          <Text accessibilityRole="header" className="text-[20px] font-bold text-ink">
+            {title}
+          </Text>
+          <Text className="text-[14px] leading-5 text-muted">{message}</Text>
+          <Button title={confirmTitle} onPress={onConfirm} />
+          <Button title={cancelTitle} secondary onPress={onCancel} />
+        </View>
+      </View>
+    </Modal>
   );
 }
 

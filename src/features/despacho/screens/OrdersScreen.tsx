@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { Badge, Button, Icon, Notice } from "@/components/ui";
+import { Badge, Button, ConfirmationModal, Icon, Notice } from "@/components/ui";
 import { colors, shadows } from "@/constants/theme";
 import { LogoutButton } from "@/features/auth/components/LogoutButton";
 import { useDispatchOrders } from "@/features/despacho/hooks/use-dispatch-orders";
@@ -132,6 +132,10 @@ export default function OrdersScreen() {
     orders,
     visibleOrders,
     loading,
+    refreshing,
+    refreshConfirmation,
+    confirmRefresh,
+    cancelRefresh,
     error,
     search,
     setSearch,
@@ -140,7 +144,7 @@ export default function OrdersScreen() {
     completed,
     pending,
     dispatchQuantity,
-    loadOrders,
+    refreshOrders,
   } = useDispatchOrders();
 
   return (
@@ -158,9 +162,9 @@ export default function OrdersScreen() {
           contentContainerClassName="px-6 pb-10"
           refreshControl={
             <RefreshControl
-              refreshing={loading && orders.length > 0}
+              refreshing={refreshing}
               onRefresh={() => {
-                void loadOrders();
+                void refreshOrders();
               }}
               tintColor={colors.primary}
               colors={[colors.primary]}
@@ -282,7 +286,7 @@ export default function OrdersScreen() {
                     title="Reintentar"
                     secondary
                     onPress={() => {
-                      void loadOrders();
+                      void refreshOrders();
                     }}
                   />
                 </View>
@@ -336,6 +340,14 @@ export default function OrdersScreen() {
           // }
         />
       </View>
+      <ConfirmationModal
+        visible={refreshConfirmation}
+        title="Hay capturas locales sin enviar"
+        message="Se actualizarán los datos del servidor. Tus capturas locales se conservarán y no se enviarán al backend."
+        confirmTitle="Confirmar actualización"
+        onConfirm={() => void confirmRefresh()}
+        onCancel={cancelRefresh}
+      />
     </SafeAreaView>
   );
 }

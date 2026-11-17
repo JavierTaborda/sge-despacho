@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Button, Notice } from "@/components/ui";
 import { colors } from "@/constants/theme";
+import { DispatchStorageNotice } from "@/features/despacho/components/DispatchStorageNotice";
 import { supabase, supabaseConfigurationError } from "@/lib/supabase";
 import { startAuthLifecycle } from "@/services/auth-lifecycle";
 import { useAuthStore } from "@/stores/useAuthStore";
@@ -53,5 +54,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       </SafeAreaView>
     );
   }
-  return children;
+  return (
+    <View className="flex-1">
+      <DispatchStorageNotice />
+      {children}
+    </View>
+  );
 }

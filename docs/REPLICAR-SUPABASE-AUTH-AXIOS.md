@@ -127,10 +127,23 @@ Las validaciones y UX de escaneo permanecen. La finalización continúa bloquead
 porque no existe endpoint para ella. No se inventan rutas de captura remota.
 
 El epoch de sesión cambia al salir o cambiar de usuario: limpia inmediatamente
-las capturas en memoria y remonta las pantallas. Los detalles pendientes del
+las capturas en memoria y en el almacenamiento local, y remonta las pantallas. Los detalles pendientes del
 epoch anterior se rechazan antes de registrar una orden. Volver a entrar con el
 mismo usuario después de logout no recupera sus borradores anteriores.
 `TOKEN_REFRESHED` del mismo usuario no borra el avance.
+
+Los borradores sin enviar se guardan por usuario con AsyncStorage (localStorage
+en web) y se restauran antes de cargar las órdenes. Cerrar la app no los borra;
+cerrar sesión sí. Se conserva la referencia del servidor para combinar futuras
+actualizaciones sin perder capturas. El refresco requiere confirmación cuando
+hay cambios locales y no los descarta. Zustand expone los errores de persistencia
+con reintento visible; no se almacenan credenciales en este guardado de borradores.
+
+Para órdenes grandes, el detalle usa `FlatList` con filas memorizadas e índices
+por artículo/código para evitar recorridos anidados. La persistencia escribe
+el formato v2: una referencia compacta del servidor y cambios de captura por
+artículo. Sigue leyendo el formato v1 bajo la misma clave por usuario; lo migra
+al guardar, sin descartar borradores existentes.
 
 `createDispatchClient(url, adapter?)` conserva normalización, timeout y semántica
 de los tests; solo ese seam aislado crea instancias propias. No se usa en

@@ -1,7 +1,7 @@
 import type { AxiosAdapter, AxiosInstance } from "axios";
 import { create, isAxiosError } from "axios";
 
-import type { DispatchItem, DispatchOrder } from "../../../domain/dispatch.ts";
+import type { DispatchOrder } from "../../../domain/dispatch.ts";
 import {
   createDispatchCaptureStore,
   DispatchError,
@@ -13,60 +13,18 @@ import {
   parseBackendDispatchOrders,
   parseBackendNoSerialBarcodes,
   parseBackendOrderId,
+  toBackendItem,
+  toBackendOrderHeader,
   type BackendDispatchItem,
   type BackendDispatchOrder,
 } from "../../../services/backend-dispatch.ts";
 import { normalizeBackendUrl } from "../../../utils/api-config.ts";
+import {
+  DispatchStorageError,
+  type DispatchDraftStorage,
+} from "./dispatch-draft-storage.ts";
 
 export { normalizeBackendUrl } from "../../../utils/api-config.ts";
-
-function toBackendOrderHeader(order: DispatchOrder): BackendDispatchOrder {
-  return {
-    prednum: order.prednum,
-    pednum: order.pednum,
-    conformado: order.conformado,
-    fecdesp: order.fecdesp,
-    fecfinalStr: order.fecfinalStr,
-    fecfinal: order.fecfinal,
-    duracion: order.duracion,
-    co_cli: order.codcli,
-    Cliente: order.customer,
-    co_zon: order.codzon,
-    Zona: order.address,
-    co_ven: order.codven,
-    Vendedor: order.vendedor,
-    cantdesp: order.items.reduce((sum, item) => sum + item.quantity, 0),
-    owneruser: String(order.owneruser),
-    supervisor: order.supervisor || null,
-  };
-}
-
-function toBackendItem(item: DispatchItem): BackendDispatchItem {
-  return {
-    prednum: item.prednum,
-    pednum: item.pednum,
-    itemnum: item.itemnum,
-    rennum: item.rennum,
-    codalma: item.codalma,
-    codart: item.codart,
-    artdes: item.artdes,
-    Articulo: item.Articulo,
-    refbarra: item.refbarra,
-    compuesto: item.compuesto,
-    manjser: item.manjser,
-    codbarra: item.codbarra,
-    serial1: item.serial1,
-    recouser: item.recouser,
-    supervisor: item.supervisor,
-    horacapture: item.horacapture,
-    changed: item.changed,
-    selected: item.selected,
-    objectstate: item.objectstate,
-    objecticon: item.objecticon,
-    lectura: item.lectura,
-    objectstate2: item.objectstate2,
-  };
-}
 
 export const backendReadOnlyMessage =
   "El backend permite enviar el predespacho, pero no incluye un endpoint para finalizar la orden.";
@@ -94,19 +52,94 @@ export function createDispatchService(
   {
     requireConfiguration = () => {},
     getSessionScope = () => 0,
-  }: { requireConfiguration?: () => void; getSessionScope?: () => number } = {},
+    getDraftOwner = () => null,
+    draftStorage,
+  }: {
+    requireConfiguration?: () => void;
+    getSessionScope?: () => number;
+    getDraftOwner?: () => string | null;
+    draftStorage?: DispatchDraftStorage;
+  } = {},
 ) {
   let localCaptures = createDispatchCaptureStore();
   let scope = getSessionScope();
+  let refreshVersion = 0;
+  let refreshRequest: Promise<BackendDispatchOrder[]> | undefined;
+  let hydrated = !draftStorage;
+  let hydration: Promise<void> | undefined;
 
   function clearCaptures() {
     localCaptures = createDispatchCaptureStore();
     scope = getSessionScope();
+    refreshVersion += 1;
+    refreshRequest = undefined;
+    hydrated = !draftStorage;
+    hydration = undefined;
   }
 
   function captures() {
     if (scope !== getSessionScope()) clearCaptures();
     return localCaptures;
+  }
+
+  async function restoreCaptures() {
+    const current = captures();
+    if (hydrated || !draftStorage) return current;
+    if (!hydration) {
+      const owner = getDraftOwner();
+      if (!owner) throw new DispatchError("Inicia sesión para restaurar tus capturas.", 401);
+      const request = draftStorage.load(owner).then((drafts) => {
+        if (current !== captures()) {
+          throw new DispatchError("La sesión cambió. Vuelve a cargar la orden.", 409);
+        }
+        localCaptures = createDispatchCaptureStore(
+          drafts.map((draft) => draft.captured),
+          drafts.map((draft) => draft.original),
+        );
+        hydrated = true;
+      });
+      hydration = request;
+    }
+    const request = hydration;
+    try {
+      await request;
+    } finally {
+      if (hydration === request) hydration = undefined;
+    }
+    return captures();
+  }
+
+  async function saveCaptures(
+    current: ReturnType<typeof createDispatchCaptureStore>,
+    orderId?: string,
+    errorMessage?: string,
+  ) {
+    if (!draftStorage) return;
+    if (current !== captures()) {
+      throw new DispatchError("La sesión cambió. Vuelve a cargar la orden.", 409);
+    }
+    const owner = getDraftOwner();
+    if (!owner) throw new DispatchError("Inicia sesión para guardar tus capturas.", 401);
+    try {
+      await draftStorage.save(owner, current.getDrafts(), errorMessage);
+    } catch (reason) {
+      if (reason instanceof DispatchStorageError && orderId && current.hasOrder(orderId)) {
+        throw new DispatchError(reason.message, 507, current.getOrder(orderId));
+      }
+      throw reason;
+    }
+  }
+
+  async function capture<T>(
+    orderId: string,
+    operation: (current: ReturnType<typeof createDispatchCaptureStore>) => T,
+  ) {
+    const current = draftStorage ? await restoreCaptures() : captures();
+    try {
+      return operation(current);
+    } finally {
+      await saveCaptures(current, orderId);
+    }
   }
 
   async function getDispatchOrderItems(orderId: string): Promise<BackendDispatchItem[]> {
@@ -124,44 +157,107 @@ export function createDispatchService(
     return parseBackendNoSerialBarcodes(data);
   }
 
+  async function getDispatchOrders(): Promise<BackendDispatchOrder[]> {
+    requireConfiguration();
+    if (draftStorage) await restoreCaptures();
+    const { data } = await api.get<unknown>("/api/dispatch/orders");
+    return parseBackendDispatchOrders(data);
+  }
+
+  async function fetchDispatchOrder(
+    orderId: string,
+    noSerialBarcodes?: Promise<string[]>,
+  ): Promise<DispatchOrder> {
+    const params = parseBackendOrderId(orderId);
+    const path = `/api/dispatch/orders/${params.prednum}/${params.pednum}`;
+    const [header, items, barcodes] = await Promise.all([
+      api.get<unknown>(path),
+      getDispatchOrderItems(orderId),
+      noSerialBarcodes ?? getNoSerialBarcodes(),
+    ]);
+    return mapBackendDispatchDetail(header.data, params, items, new Set(barcodes));
+  }
+
+  function requireCurrentCaptures(
+    current: ReturnType<typeof createDispatchCaptureStore>,
+    version: number,
+  ) {
+    if (current !== captures()) {
+      throw new DispatchError("La sesión cambió. Vuelve a cargar la orden.", 409);
+    }
+    if (version !== refreshVersion) {
+      throw new DispatchError("Los datos se actualizaron. Vuelve a cargar la orden.", 409);
+    }
+  }
+
+  async function reloadDispatchOrders() {
+    requireConfiguration();
+    const currentCaptures = draftStorage ? await restoreCaptures() : captures();
+    const version = ++refreshVersion;
+    const noSerialBarcodes = getNoSerialBarcodes();
+    const [orders, updates] = await Promise.all([
+      getDispatchOrders(),
+      Promise.all(currentCaptures.getOrders().map((order) =>
+        fetchDispatchOrder(order.id, noSerialBarcodes),
+      )),
+      noSerialBarcodes,
+    ]);
+    requireCurrentCaptures(currentCaptures, version);
+    currentCaptures.refreshOrders(updates);
+    await saveCaptures(currentCaptures);
+    return orders;
+  }
+
+  async function refreshDispatchOrders() {
+    captures();
+    if (refreshRequest) return refreshRequest;
+    const request = reloadDispatchOrders();
+    refreshRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (refreshRequest === request) refreshRequest = undefined;
+    }
+  }
+
   return {
     clearCaptures,
     getDispatchOrderItems,
     getNoSerialBarcodes,
-    async getDispatchOrders(): Promise<BackendDispatchOrder[]> {
-      requireConfiguration();
-      const { data } = await api.get<unknown>("/api/dispatch/orders");
-      return parseBackendDispatchOrders(data);
+    getDispatchOrders,
+    refreshDispatchOrders,
+    async hasLocalCaptures() {
+      const current = draftStorage ? await restoreCaptures() : captures();
+      return current.getDrafts().length > 0;
     },
     async getDispatchOrder(orderId: string): Promise<DispatchOrder> {
       requireConfiguration();
-      const params = parseBackendOrderId(orderId);
-      const currentCaptures = captures();
+      parseBackendOrderId(orderId);
+      if (refreshRequest) await refreshRequest;
+      const currentCaptures = draftStorage ? await restoreCaptures() : captures();
+      const version = refreshVersion;
+      requireCurrentCaptures(currentCaptures, version);
       if (currentCaptures.hasOrder(orderId)) return currentCaptures.getOrder(orderId);
-      const path = `/api/dispatch/orders/${params.prednum}/${params.pednum}`;
-      const [header, items, noSerialBarcodes] = await Promise.all([
-        api.get<unknown>(path),
-        getDispatchOrderItems(orderId),
-        getNoSerialBarcodes(),
-      ]);
-      if (currentCaptures !== captures()) {
-        throw new DispatchError("La sesión cambió. Vuelve a cargar la orden.", 409);
-      }
-      return currentCaptures.registerOrder(
-        mapBackendDispatchDetail(header.data, params, items, new Set(noSerialBarcodes)),
-      );
+      const order = await fetchDispatchOrder(orderId);
+      requireCurrentCaptures(currentCaptures, version);
+      return currentCaptures.registerOrder(order);
     },
     async checkBarcode(orderId: string, itemId: string, code: string) {
-      return captures().checkBarcode(orderId, itemId, code);
+      return capture(orderId, (current) => current.checkBarcode(orderId, itemId, code));
     },
     async checkSerial(orderId: string, itemId: string, code: string) {
-      return captures().checkSerial(orderId, itemId, code);
+      return capture(orderId, (current) => current.checkSerial(orderId, itemId, code));
+    },
+    async discardDispatchCaptures(orderId: string) {
+      if (refreshRequest) await refreshRequest;
+      return capture(orderId, (current) => current.discardOrderCaptures(orderId));
     },
     async completeDispatch(orderId: string) {
       throw new DispatchError(backendReadOnlyMessage, 405);
     },
     async submitPredispatch(order: DispatchOrder) {
       requireConfiguration();
+      const current = draftStorage ? await restoreCaptures() : captures();
       if (!order.items.length || !order.items.every(isItemComplete)) {
         throw new DispatchError("Debes validar todos los artículos y sus seriales.", 409);
       }
@@ -172,6 +268,18 @@ export function createDispatchService(
         items: order.items.map(toBackendItem),
       };
       await api.post("/api/dispatch/orders/predispatch", payload);
+      if (current !== captures()) return;
+      if (current.hasOrder(order.id)) current.acknowledgeOrder(order);
+      try {
+        await saveCaptures(
+          current,
+          undefined,
+          "El predespacho ya se envió. No pudimos actualizar el guardado local; reintenta el guardado y no vuelvas a enviarlo.",
+        );
+      } catch (reason) {
+        // El error de almacenamiento se muestra globalmente; no simular un fallo del envío.
+        if (!(reason instanceof DispatchStorageError)) throw reason;
+      }
     },
   };
 }

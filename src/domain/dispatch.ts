@@ -147,8 +147,23 @@ function copyOrder(order: DispatchOrder): DispatchOrder {
   };
 }
 
-export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) {
-  const orders = initialOrders.map(copyOrder);
+export type DispatchDraft = { original: DispatchOrder; captured: DispatchOrder };
+
+export function hasCaptureChanges(item: DispatchItem, original: DispatchItem) {
+  return item.codbarra !== original.codbarra ||
+    item.serial1 !== original.serial1 ||
+    item.horacapture !== original.horacapture ||
+    item.barcodeChecked !== original.barcodeChecked ||
+    item.serials.length !== original.serials.length ||
+    item.serials.some((serial, index) => serial !== original.serials[index]);
+}
+
+export function createDispatchCaptureStore(
+  initialOrders: DispatchOrder[] = [],
+  originalOrders: DispatchOrder[] = initialOrders,
+) {
+  let orders = initialOrders.map(copyOrder);
+  const serverOrders = new Map(originalOrders.map((order) => [order.id, copyOrder(order)]));
 
   function findOrder(orderId: string) {
     const order = orders.find((entry) => entry.id === orderId);
@@ -185,8 +200,78 @@ export function createDispatchCaptureStore(initialOrders: DispatchOrder[] = []) 
     registerOrder(order: DispatchOrder) {
       if (!orders.some((entry) => entry.id === order.id)) {
         orders.push(copyOrder(order));
+        serverOrders.set(order.id, copyOrder(order));
       }
       return copyOrder(findOrder(order.id));
+    },
+    refreshOrders(updates: DispatchOrder[]) {
+      const replacements = new Map(updates.map((fresh) => {
+        const previous = findOrder(fresh.id);
+        const baseline = serverOrders.get(fresh.id);
+        if (!baseline) throw new DispatchError("Vuelve a cargar la orden antes de actualizar.", 409);
+        const merged = copyOrder(fresh);
+        const originalItems = new Map(baseline.items.map((item) => [item.id, item]));
+        const mergedItems = new Map(merged.items.map((item) => [item.id, item]));
+
+        for (const captured of previous.items) {
+          const original = originalItems.get(captured.id);
+          if (!original) throw new DispatchError("No encontramos el artículo original.", 409);
+          if (!hasCaptureChanges(captured, original)) continue;
+
+          const item = mergedItems.get(captured.id);
+          if (
+            !item || item.sku !== captured.sku ||
+            item.barcode !== captured.barcode || item.quantity !== captured.quantity
+          ) {
+            throw new DispatchError(
+              `El artículo ${captured.name} cambió en el servidor. No se actualizó la información para conservar tus capturas locales.`,
+              409,
+            );
+          }
+          if (captured.codbarra !== original.codbarra) item.codbarra = captured.codbarra;
+          if (captured.serial1 !== original.serial1) item.serial1 = captured.serial1;
+          if (captured.horacapture !== original.horacapture) item.horacapture = captured.horacapture;
+          if (
+            captured.serials.length !== original.serials.length ||
+            captured.serials.some((serial, index) => serial !== original.serials[index])
+          ) item.serials = [...captured.serials];
+          item.barcodeChecked = item.requiresSerial
+            ? captured.barcodeChecked && !isItemComplete(item)
+            : !!item.codbarra?.trim();
+        }
+        return [fresh.id, merged] as const;
+      }));
+
+      orders = orders.map((order) => replacements.get(order.id) ?? order);
+      for (const order of updates) serverOrders.set(order.id, copyOrder(order));
+    },
+    getDrafts(): DispatchDraft[] {
+      return orders.flatMap((order) => {
+        const original = serverOrders.get(order.id);
+        if (!original) throw new DispatchError("No encontramos los datos originales de la orden.", 409);
+        const originalItems = new Map(original.items.map((item) => [item.id, item]));
+        const changed = order.items.some((item) => {
+          const baseline = originalItems.get(item.id);
+          return !baseline || hasCaptureChanges(item, baseline);
+        });
+        return changed ? [{ original: copyOrder(original), captured: copyOrder(order) }] : [];
+      });
+    },
+    acknowledgeOrder(order: DispatchOrder) {
+      findOrder(order.id);
+      serverOrders.set(order.id, copyOrder(order));
+    },
+    discardOrderCaptures(orderId: string) {
+      const current = findOrder(orderId);
+      if (isOrderComplete(current)) {
+        throw new DispatchError("Esta orden ya fue despachada.", 409, current);
+      }
+      const original = serverOrders.get(orderId);
+      if (!original) {
+        throw new DispatchError("No encontramos los datos originales de la orden.", 409);
+      }
+      orders = orders.map((order) => order.id === orderId ? copyOrder(original) : order);
+      return copyOrder(original);
     },
     getOrders: () => orders.map(copyOrder),
     getOrder: (orderId: string) => copyOrder(findOrder(orderId)),
